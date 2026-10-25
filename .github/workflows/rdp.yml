@@ -27,16 +27,12 @@ jobs:
         run: |
           $username = "Admin"
           $password = "Vishnh"
-          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
           
-          if (-not (Get-LocalUser -Name $username -ErrorAction SilentlyContinue)) {
-              New-LocalUser -Name $username -Password $securePass -AccountNeverExpires -PasswordNeverExpires
-          } else {
-              Set-LocalUser -Name $username -Password $securePass
-          }
-          
-          Add-LocalGroupMember -Group "Administrators" -Member $username -ErrorAction SilentlyContinue
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username -ErrorAction SilentlyContinue
+          # જો યુઝર પહેલેથી હોય તો ડિલીટ કરી નવો બનાવવો જેથી એરર ન આવે
+          net user $username /delete 2>$null
+          net user $username $password /add /expires:never /passwordreq:no
+          net localgroup Administrators $username /add
+          net localgroup "Remote Desktop Users" $username /add
           
           echo "RDP_USER=$username" >> $env:GITHUB_ENV
           echo "RDP_PASS=$password" >> $env:GITHUB_ENV
