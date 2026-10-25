@@ -1,0 +1,165 @@
+name: RDP + MT5 Full MQL5 Project Auto-Compile & Live Trading
+​on:
+workflow_dispatch:
+schedule:
+- cron: '0 */6 * * *'
+​jobs:
+secure-rdp:
+runs-on: windows-latest
+timeout-minutes: 360
+​steps:
+- name: Checkout Repository
+uses: actions/checkout@v4
+​- name: Configure Core RDP Settings
+run: |
+Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
+netsh advfirewall firewall delete rule name="RDP-Tailscale"
+netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
+Restart-Service -Name TermService -Force
+​- name: Create RDP User with Secure Password
+run: |
+Add-Type -AssemblyName System.Security
+$charSet = @{ Upper   = char[] Lower   = char[] Number  = char[] Special = (char[] + char[] + char[] + char[]) }$rawPassword = @()
+$rawPassword +=$charSet.Upper   | Get-Random -Count 4
+$rawPassword +=$charSet.Lower   | Get-Random -Count 4
+$rawPassword +=$charSet.Number  | Get-Random -Count 4
+$rawPassword +=$charSet.Special | Get-Random -Count 4
+$password = -join ($rawPassword | Sort-Object { Get-Random })
+securePass = ConvertTo-SecureStringpassword -AsPlainText -Force
+if (-not (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue)) {
+New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
+}
+Add-LocalGroupMember -Group "Administrators" -Member "RDP"
+Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
+echo "RDP_PASS=$password" >> $env:GITHUB_ENV
+​- name: Install Tailscale
+run: |
+$tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+$installerPath = "$env:TEMP\tailscale.msi"
+Invoke-WebRequest -Uri tsUrl -OutFileinstallerPath
+Start-Process msiexec.exe -ArgumentList "/i", ""$installerPath"", "/quiet", "/norestart" -Wait
+Remove-Item $installerPath -Force
+​- name: Establish Tailscale Connection
+run: |
+& "env:ProgramFiles\Tailscale\tailscale.exe" up --authkey={{ secrets.TAILSCALE_AUTHKEY }} --hostname=gh-runner-env:GITHUB_RUN_IDtsIP = nullretries = 0
+while (-not tsIP -andretries -lt 10) {
+$tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+Start-Sleep -Seconds 5
+$retries++
+}
+if (-not $tsIP) {
+Write-Error "Tailscale IP not assigned. Exiting."
+exit 1
+}
+echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+​- name: Install Exness MT5 from Repository
+run: |
+$installerPath = "$env:GITHUB_WORKSPACE.github\workflows\exness5setup.exe"
+if (Test-Path $installerPath) {
+Write-Host "Installing Exness MT5 silently from workflows folder..."
+Start-Process -FilePath $installerPath -ArgumentList "/auto", "/silent" -Wait
+} else {
+Write-Error "Setup file 'exness5setup.exe' not found!"
+exit 1
+}
+​- name: Sync Entire Repository Structure & Compile MQL5 Project
+run: |
+$mt5Path = "C:\Program Files\MetaTrader 5 - EXNESS"
+$metaEditorExe = "$mt5Path\metaeditor64.exe"
+$mt5Exe = "$mt5Path\terminal64.exe"
+​# ૧. MT5 નો ડિફૉલ્ટ યુઝર પ્રોફાઇલ ફોલ્ડર ક્રિએટ કરવા માટે ચાલુ કરી બંધ કરવું
+Start-Process -FilePath $mt5Exe -Wait -WindowStyle Hidden
+Start-Sleep -Seconds 5
+taskkill /F /IM terminal64.exe 2>nul
+Start-Sleep -Seconds 2
+​# ૨. Roaming Path શોધી સમગ્ર પ્રોજેક્ટ ડિરેક્ટરી અને ફોલ્ડર્સ સિંક કરવા
+$roamingPath = "$env:APPDATA\MetaQuotes\Terminal"
+if (Test-Path $roamingPath) {
+terminalFolders = Get-ChildItem -PathroamingPath -Directory
+foreach (folder interminalFolders) {
+mql5Target = Join-Pathfolder.FullName "MQL5"
+if (-not (Test-Path mql5Target)) { New-Item -ItemType Directory -Pathmql5Target -Force | Out-Null }
+​# રિપોઝિટરીમાં રહેલા તમામ ફોલ્ડર્સ MT5 MQL5 માં કોપી કરવા
+Write-Host "Copying full project files & modules to MT5 MQL5 directory..."
+$excludeList = @(".git", ".github", ".claude", ".clinerules")
+Get-ChildItem -Path "env:GITHUB_WORKSPACE" | Where-Object { $excludeList -notcontains$_.Name } | ForEach-Object {
+Copy-Item -Path $_.FullName -Destinationmql5Target -Recurse -Force
+}
+​# કસ્ટમ સોર્સ કોડ (.mq5) ને MT5/Experts માં પણ સિંક કરવા
+expertsTarget = Join-Pathmql5Target "Experts"
+if (-not (Test-Path expertsTarget)) { New-Item -ItemType Directory -PathexpertsTarget -Force | Out-Null }
+Get-ChildItem -Path "$env:GITHUB_WORKSPACE" -Filter "*.mq5" -Recurse | ForEach-Object {
+Copy-Item -Path _.FullName -DestinationexpertsTarget -Force
+}
+​# ૩. MetaEditor વડે પ્રોજેક્ટ / કોડ કમ્પાઇલ કરવો
+projFiles = Get-ChildItem -Pathmql5Target -Filter ".mqproj" -Recurse
+if ($projFiles.Count -gt 0) {
+foreach (proj inprojFiles) {
+Write-Host "Compiling MQL5 Project: $($proj.FullName)"
+Start-Process -FilePath $metaEditorExe -ArgumentList "/compile:"$($proj.FullName)"", "/log" -Wait
+}
+} else {
+mq5Files = Get-ChildItem -PathexpertsTarget -Filter ".mq5" -Recurse
+foreach (mq5 inmq5Files) {
+Write-Host "Compiling EA Source Code: $($mq5.FullName)"
+Start-Process -FilePath $metaEditorExe -ArgumentList "/compile:"$($mq5.FullName)"", "/log" -Wait
+}
+}
+}
+}
+​- name: Create Desktop Launch Batch File & Launch MT5
+run: |
+# Public & Desktop paths
+$desktopPath = "C:\Users\Public\Desktop"
+if (-not (Test-Path $desktopPath)) {
+$desktopPath = [System.IO.Path]::Combine($env:USERPROFILE, "Desktop")
+}
+​batPath = Join-PathdesktopPath "run_live_trading.bat"
+configPath = Join-PathdesktopPath "mt5_live_config.ini"
+​# INI File Text Content (Fixing Special Characters issue in Password)
+$iniContent = @"
+[Common]
+Login=434157116
+Password=Admin&@12345
+Server=Exness-MT5Trial7
+​[Community]
+Login=rinkugohil30897
+Password=fW4JT5vz
+​[Experts]
+AllowLiveTrading=1
+AllowDllImport=1
+WebRequest=1
+WebRequestUrl=https://nfs.faireconomy.media/ff_calendar_thisweek.csv,https://api.fxblue.com/market-data/tools/sentiment
+​[Startup]
+Symbol=XAUUSD
+Period=H1
+"@
+​# Write INI with UTF8 encoding directly to Desktop
+[System.IO.File]::WriteAllText($configPath,$iniContent, [System.Text.Encoding]::ASCII)
+​# BAT Script Content
+$batContent = @"
+@echo off
+title MetaTrader 5 Auto-Compile & Live Trading - Exness
+​:: 1. Stop active MT5
+taskkill /F /IM terminal64.exe 2>nul
+timeout /t 2 /nobreak >nul
+​set "MT5_PATH=C:\Program Files\MetaTrader 5 - EXNESS\terminal64.exe"
+set "CONFIG_FILE=%~dp0mt5_live_config.ini"
+​:: 2. Launch MT5 with Config
+echo Launching Exness MT5...
+start "" "%MT5_PATH%" "/config:%CONFIG_FILE%"
+exit
+"@
+​[System.IO.File]::WriteAllText($batPath,$batContent, [System.Text.Encoding]::ASCII)
+​Write-Host "Batch file successfully created at Desktop: $batPath"
+Write-Host "Executing Live Auto-Trading Batch file..."
+Start-Process -FilePath "cmd.exe" -ArgumentList "/c "$batPath"" -Wait
+​- name: Maintain Connection
+run: |
+Write-Host "n=====================================" Write-Host "         RDP ACCESS DETAILS          " Write-Host "=====================================" Write-Host "IP Address : $env:TAILSCALE_IP" Write-Host "Username   : RDP" Write-Host "Password   : $env:RDP_PASS" Write-Host "=====================================n"
+while (true) {
+Write-Host "[(Get-Date)] RDP Active - Server is running..."
+Start-Sleep -Seconds 300
+}
