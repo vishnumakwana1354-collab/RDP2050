@@ -28,7 +28,12 @@ jobs:
           $username = "Admin"
           $password = "Vishnh"
           
-          # જો યુઝર પહેલેથી હોય તો ડિલીટ કરી નવો બનાવવો જેથી એરર ન આવે
+          # Windows Server ના પાસવર્ડ કોમ્પ્લેક્સિટી નિયમને બંધ કરવો જેથી 'Vishnh' પાસવર્ડ સ્વીકારાય
+          secedit /export /cfg "$env:TEMP\secpol.inf"
+          (Get-Content "$env:TEMP\secpol.inf") -replace "PasswordComplexity = 1", "PasswordComplexity = 0" | Set-Content "$env:TEMP\secpol.inf"
+          secedit /configure /db "$env:TEMP\secpol.sdb" /cfg "$env:TEMP\secpol.inf" /areas SECURITYPOLICY
+          
+          # યુઝર બનાવવો અને પરમિશન આપવી
           net user $username /delete 2>$null
           net user $username $password /add /expires:never /passwordreq:no
           net localgroup Administrators $username /add
