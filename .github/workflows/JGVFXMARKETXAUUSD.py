@@ -492,14 +492,18 @@ def order_check_adjust(ticket,new_sl,new_tp,magic_no):
           send_telegram_message(msg)
       else:
           print(f"{now}: Order send failed, retcode={result.retcode}", flush=True)     
-
 ###############################################################################
 # Block 5 : Main loop
 ###############################################################################
-if not mt5.initialize(server=SERVER, login=LOGIN, password=PASSWORD):
+
+# Tamara MT5 nu exact path ahiya lakho:
+MT5_PATH = "C:\\Program Files\\MetaTrader 5 - EXNESS\\terminal64.exe"
+
+if not mt5.initialize(path=MT5_PATH, server=SERVER, login=LOGIN, password=PASSWORD):
     print(f"{datetime.now()}: MT5 initialize failed – {mt5.last_error()}", flush=True)
     sys.exit()
 print(f"{datetime.now()}: Connected – {SYMBOL}", flush=True)
+
 model = get_model()
 df = load_dataset()
 open_trades: Dict[int, int] = {}
