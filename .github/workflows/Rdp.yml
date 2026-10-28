@@ -1,0 +1,240 @@
+name: RDP + MT5 & Python XAUUSDm Auto-Trading Automation
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 */6 * * *'
+
+jobs:
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11.9
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11.9'
+
+      - name: Configure Core RDP Settings
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
+          netsh advfirewall firewall delete rule name="RDP-Tailscale"
+          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
+          Restart-Service -Name TermService -Force
+
+      - name: Create RDP User with Custom Credentials
+        run: |
+          $username = "Admin"
+          $password = "Vishnu"
+
+          # Windows Server password complexity override
+          secedit /export /cfg "$env:TEMP\secpol.inf"
+          (Get-Content "$env:TEMP\secpol.inf") -replace "PasswordComplexity = 1", "PasswordComplexity = 0" | Set-Content "$env:TEMP\secpol.inf"
+          secedit /configure /db "$env:TEMP\secpol.sdb" /cfg "$env:TEMP\secpol.inf" /areas SECURITYPOLICY
+
+          net user $username /delete 2>$null
+          net user $username $password /add /expires:never /passwordreq:no
+          net localgroup Administrators $username /add
+          net localgroup "Remote Desktop Users" $username /add
+
+          echo "RDP_USER=$username" >> $env:GITHUB_ENV
+          echo "RDP_PASS=$password" >> $env:GITHUB_ENV
+
+      - name: Install Tailscale
+        run: |
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "$installerPath", "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force
+
+      - name: Establish Tailscale Connection
+        env:
+          TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+        run: |
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=$env:TAILSCALE_AUTHKEY --hostname=gh-runner-$env:GITHUB_RUN_ID
+          $tsIP = $null
+          $retries = 0
+          while (-not $tsIP -and $retries -lt 10) {
+              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+              Start-Sleep -Seconds 5
+              $retries++
+          }
+          if (-not $tsIP) {
+              Write-Error "Tailscale IP not assigned. Exiting."
+              exit 1
+          }
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+
+      - name: Setup Python Environment & Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install MetaTrader5 pandas numpy requests scikit-learn joblib
+
+      - name: Install Exness MT5 from Repository
+        run: |
+          $installerPath = "$env:GITHUB_WORKSPACE\.github\workflows\exness5setup.exe"
+          if (Test-Path $installerPath) {
+              Write-Host "Installing Exness MT5 silently from workflows folder..."
+              Start-Process -FilePath $installerPath -ArgumentList "/auto", "/silent" -Wait
+          } else {
+              Write-Error "Setup file 'exness5setup.exe' not found!"
+              exit 1
+          }
+
+      - name: Setup Bot Script & Sync MQL5 Code
+        run: |
+          # 1. Setup Bot Folder and Copy Python Script with Path Patching
+          $botTargetDir = "C:\XAUBOT_FF"
+          New-Item -ItemType Directory -Path $botTargetDir -Force | Out-Null
+
+          $botSource = Join-Path $env:GITHUB_WORKSPACE ".github\workflows\JGVFXMARKETXAUUSD.py"
+          $botTarget = Join-Path $botTargetDir "JGVFXMARKETXAUUSD.py"
+
+          if (Test-Path $botSource) {
+              $botContent = Get-Content -Path $botSource -Raw
+              # Replace hardcoded local BASE_DIR with C:\XAUBOT_FF for runner compatibility
+              $botContent = $botContent -replace 'BASE_DIR\s*=\s*r".*?"', 'BASE_DIR = r"C:\XAUBOT_FF"'
+              [System.IO.File]::WriteAllText($botTarget, $botContent, [System.Text.Encoding]::UTF8)
+              Write-Host "Python bot successfully configured at: $botTarget"
+          } else {
+              Write-Error "JGVFXMARKETXAUUSD.py not found in .github/workflows/"
+              exit 1
+          }
+
+          # 2. MT5 Live Trading INI Config (Exness Real Account)
+          $desktopPath = "C:\Users\Public\Desktop"
+          if (-not (Test-Path $desktopPath)) {
+              $desktopPath = [System.IO.Path]::Combine($env:USERPROFILE, "Desktop")
+          }
+          $configPath = Join-Path $desktopPath "mt5_live_config.ini"
+
+          $iniContent = @"
+          [Common]
+          Login=263239369
+          Password=Admin&@12345
+          Server=Exness-MT5Real37
+
+          [Community]
+          Login=rinkugohil30897
+          Password=fW4JT5vz
+
+          [Experts]
+          AllowLiveTrading=1
+          AllowDllImport=1
+          WebRequest=1
+          WebRequestUrl=https://nfs.faireconomy.media/ff_calendar_thisweek.csv,https://api.fxblue.com/market-data/tools/sentiment
+
+          [Startup]
+          Symbol=XAUUSDm
+          Period=M1
+          "@
+
+          [System.IO.File]::WriteAllText($configPath, $iniContent, [System.Text.Encoding]::ASCII)
+
+          # 3. Locate MT5 Roaming Directory & Sync MQL5 files / EAs
+          $mt5Path = "C:\Program Files\MetaTrader 5 - EXNESS"
+          $metaEditorExe = "$mt5Path\metaeditor64.exe"
+          $roamingPath = "$env:APPDATA\MetaQuotes\Terminal"
+
+          if (Test-Path $roamingPath) {
+              $terminalFolders = Get-ChildItem -Path $roamingPath -Directory
+              foreach ($folder in $terminalFolders) {
+                  $mql5Target = Join-Path $folder.FullName "MQL5"
+                  if (-not (Test-Path $mql5Target)) { New-Item -ItemType Directory -Path $mql5Target -Force | Out-Null }
+
+                  Write-Host "Syncing repository code into MT5 MQL5 folder..."
+                  $excludeList = @(".git", ".github", ".claude", ".clinerules")
+                  Get-ChildItem -Path $env:GITHUB_WORKSPACE | Where-Object { $excludeList -notcontains $_.Name } | ForEach-Object {
+                      Copy-Item -Path $_.FullName -Destination $mql5Target -Recurse -Force
+                  }
+
+                  $expertsTarget = Join-Path $mql5Target "Experts"
+                  if (-not (Test-Path $expertsTarget)) { New-Item -ItemType Directory -Path $expertsTarget -Force | Out-Null }
+                  Get-ChildItem -Path $env:GITHUB_WORKSPACE -Filter "*.mq5" -Recurse | ForEach-Object {
+                      Copy-Item -Path $_.FullName -Destination $expertsTarget -Force
+                  }
+
+                  # MetaEditor project compilation
+                  $projFiles = Get-ChildItem -Path $mql5Target -Filter "*.mqproj" -Recurse
+                  if ($projFiles.Count -gt 0) {
+                      foreach ($proj in $projFiles) {
+                          Write-Host "Compiling Project: $($proj.FullName)"
+                          $proc = Start-Process -FilePath $metaEditorExe -ArgumentList "/compile:`"$($proj.FullName)`"" -PassThru
+                          $timeoutSec = 20
+                          $sw = [System.Diagnostics.Stopwatch]::StartNew()
+                          while (-not $proc.HasExited -and $sw.Elapsed.TotalSeconds -lt $timeoutSec) {
+                              Start-Sleep -Milliseconds 500
+                          }
+                          if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
+                      }
+                  }
+              }
+          }
+
+          # 4. Create run_all.bat for starting MT5 and Python Bot
+          $batPath = Join-Path $desktopPath "run_all.bat"
+          $batContent = @"
+          @echo off
+          title Exness MT5 & Python XAUUSDm Bot Runner
+          echo ========================================================
+          echo    Starting Exness MT5 & Python XAUUSDm Automation
+          echo ========================================================
+
+          set "MT5_PATH=C:\Program Files\MetaTrader 5 - EXNESS"
+          set "TERMINAL=%MT5_PATH%\terminal64.exe"
+          set "CONFIG_FILE=%~dp0mt5_live_config.ini"
+
+          :: 1. Stop existing instances
+          taskkill /F /IM terminal64.exe 2>nul
+          timeout /t 2 /nobreak >nul
+
+          :: 2. Launch MT5 Profile Initialization
+          echo [1/3] Initializing MT5 Profile...
+          start "" "%TERMINAL%"
+          timeout /t 5 /nobreak >nul
+          taskkill /F /IM terminal64.exe 2>nul
+          timeout /t 2 /nobreak >nul
+
+          :: 3. Launching MT5 with Live Trading Config
+          echo [2/3] Launching MetaTrader 5 with Config (XAUUSDm)...
+          start "" "%TERMINAL%" "/config:%CONFIG_FILE%"
+          timeout /t 5 /nobreak >nul
+
+          :: 4. Launching Python Trading Bot Script
+          echo [3/3] Launching Python Bot Script (JGVFXMARKETXAUUSD.py)...
+          start "Python XAUUSDm Bot" cmd /k "python "C:\XAUBOT_FF\JGVFXMARKETXAUUSD.py""
+
+          echo ========================================================
+          echo    Success! MT5 and Python Bot are running live.
+          echo ========================================================
+          "@
+
+          [System.IO.File]::WriteAllText($batPath, $batContent, [System.Text.Encoding]::ASCII)
+          Write-Host "run_all.bat successfully created at Desktop: $batPath"
+
+          # 5. Execute Desktop run_all.bat
+          Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$batPath`""
+
+      - name: Maintain Connection & Monitor RDP
+        run: |
+          Write-Host ""
+          Write-Host "====================================="
+          Write-Host "        RDP ACCESS DETAILS           "
+          Write-Host "====================================="
+          Write-Host "IP Address : $env:TAILSCALE_IP"
+          Write-Host "Username   : Admin"
+          Write-Host "Password   : Vishnu"
+          Write-Host "====================================="
+          Write-Host ""
+
+          while ($true) {
+              Write-Host "[(Get-Date)] RDP Active - Server & MT5 Bot running..."
+              Start-Sleep -Seconds 300
+          }
