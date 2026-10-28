@@ -18,7 +18,7 @@ if sys.version_info >= (3, 12):
 ###############################################################################
 # Block 2 : User settings
 ###############################################################################
-LOGIN, PASSWORD, SERVER = 434157116, "Admin&@12345", "Exness-MT5Trial7"
+LOGIN, PASSWORD, SERVER = 263239369, "Admin&@12345", "Exness-MT5Real37"
 SYMBOL         = "XAUUSDm"                # Trading instrument
 TF_ENTRY       = mt5.TIMEFRAME_M1         #M5 Timeframe for entry signals
 TF_TREND       = mt5.TIMEFRAME_M15        #H1 Timeframe for trend confirmation
@@ -29,7 +29,7 @@ RR_RATIO       = 2.0                      #2 Risk/Reward ratio for TP
 SL_ATR_MULTI   = 2.2                      #2 Multiplier for ATR-based Stop Loss
 THRESHOLD       = 0.60    # Trade only if P(win) >= 60 %
 WARMUP_TRADES   = 30      #30 First 30 trades are always executed to gather data
-BASE_DIR   = r"C:\Users\Krist\Desktop\XAUBOT_FF"
+BASE_DIR   = r"C:\Desktop\XAU"
 SYMBOL_DIR = os.path.join(BASE_DIR, SYMBOL)
 os.makedirs(SYMBOL_DIR, exist_ok=True)
 FEATURE_FILE = os.path.join(SYMBOL_DIR, "features_22-25.csv") # Switched to CSV for easier handling
