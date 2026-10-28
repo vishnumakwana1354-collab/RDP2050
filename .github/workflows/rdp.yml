@@ -97,13 +97,13 @@ jobs:
               # Replace hardcoded local BASE_DIR with C:\XAUBOT_FF for runner compatibility
               $botContent = $botContent -replace 'BASE_DIR\s*=\s*r".*?"', 'BASE_DIR = r"C:\XAUBOT_FF"'
               [System.IO.File]::WriteAllText($botTarget, $botContent, [System.Text.Encoding]::UTF8)
-              Write-Host "Python bot successfully copied and configured at: $botTarget"
+              Write-Host "Python bot successfully configured at: $botTarget"
           } else {
               Write-Error "JGVFXMARKETXAUUSD.py not found in .github/workflows/"
               exit 1
           }
 
-          # 2. MT5 Live Trading INI Config for XAUUSDm / Account Login
+          # 2. MT5 Live Trading INI Config (Exness Real Account)
           $desktopPath = "C:\Users\Public\Desktop"
           if (-not (Test-Path $desktopPath)) {
               $desktopPath = [System.IO.Path]::Combine($env:USERPROFILE, "Desktop")
@@ -112,9 +112,9 @@ jobs:
 
           $iniContent = @"
           [Common]
-          Login=434157116
+          Login=263239369
           Password=Admin&@12345
-          Server=Exness-MT5Trial7
+          Server=Exness-MT5Real37
 
           [Community]
           Login=rinkugohil30897
