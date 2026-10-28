@@ -19,7 +19,7 @@ if sys.version_info >= (3, 12):
 # Block 2 : User settings
 ###############################################################################
 LOGIN, PASSWORD, SERVER = 263239369, "Admin&@12345", "Exness-MT5Real37"
-SYMBOL         = "XAUUSDm"                # Trading instrument
+SYMBOL         = "XAUUSDc"                # Trading instrument
 TF_ENTRY       = mt5.TIMEFRAME_M1         #M5 Timeframe for entry signals
 TF_TREND       = mt5.TIMEFRAME_M15        #H1 Timeframe for trend confirmation
 EMA_PERIOD     = 8                        #16,22 Period for the Exponential Moving Average
