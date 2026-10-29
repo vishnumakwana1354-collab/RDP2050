@@ -1,4 +1,4 @@
-name: RDP + MT5 & Python XAUUSDm Auto-Trading Automation
+name: RDP + MT4 & Python XAUUSDm Auto-Trading Automation
 
 on:
   workflow_dispatch:
@@ -77,18 +77,18 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install MetaTrader5 pandas numpy requests scikit-learn joblib
 
-      - name: Install Exness MT5 from Repository
+      - name: Install Exness MT4 from Repository
         run: |
-          $installerPath = "$env:GITHUB_WORKSPACE\.github\workflows\exness5setup.exe"
+          $installerPath = "$env:GITHUB_WORKSPACE\.github\workflows\exness4setup.exe"
           if (Test-Path $installerPath) {
-              Write-Host "Installing Exness MT5 silently from workflows folder..."
+              Write-Host "Installing Exness MT4 silently from workflows folder..."
               Start-Process -FilePath $installerPath -ArgumentList "/auto", "/silent" -Wait
           } else {
-              Write-Error "Setup file 'exness5setup.exe' not found!"
+              Write-Error "Setup file 'exness4setup.exe' not found!"
               exit 1
           }
 
-      - name: Setup Bot Script & Sync MQL5 Code
+      - name: Setup Bot Script & Sync MQL4 Code
         run: |
           # 1. Setup Bot Folder and Copy Python Script with Path Patching
           $botTargetDir = "C:\XAUBOT_FF"
@@ -99,7 +99,6 @@ jobs:
 
           if (Test-Path $botSource) {
               $botContent = Get-Content -Path $botSource -Raw
-              # Replace hardcoded local BASE_DIR with C:\XAUBOT_FF for runner compatibility
               $botContent = $botContent -replace 'BASE_DIR\s*=\s*r".*?"', 'BASE_DIR = r"C:\XAUBOT_FF"'
               [System.IO.File]::WriteAllText($botTarget, $botContent, [System.Text.Encoding]::UTF8)
               Write-Host "Python bot successfully configured at: $botTarget"
@@ -108,22 +107,18 @@ jobs:
               exit 1
           }
 
-          # 2. MT5 Live Trading INI Config (Exness Real Account)
+          # 2. MT4 Live Trading INI Config (Exness Real Account)
           $desktopPath = "C:\Users\Public\Desktop"
           if (-not (Test-Path $desktopPath)) {
               $desktopPath = [System.IO.Path]::Combine($env:USERPROFILE, "Desktop")
           }
-          $configPath = Join-Path $desktopPath "mt5_live_config.ini"
+          $configPath = Join-Path $desktopPath "mt4_live_config.ini"
 
           $iniContent = @"
           [Common]
-          Login=263239369
+          Login=117123489
           Password=Admin&@12345
-          Server=Exness-MT5Real37
-
-          [Community]
-          Login=rinkugohil30897
-          Password=fW4JT5vz
+          Server=Exness-Real32
 
           [Experts]
           AllowLiveTrading=1
@@ -138,35 +133,38 @@ jobs:
 
           [System.IO.File]::WriteAllText($configPath, $iniContent, [System.Text.Encoding]::ASCII)
 
-          # 3. Locate MT5 Roaming Directory & Sync MQL5 files / EAs
-          $mt5Path = "C:\Program Files\MetaTrader 5 - EXNESS"
-          $metaEditorExe = "$mt5Path\metaeditor64.exe"
+          # 3. Locate MT4 Roaming Directory & Sync MQL4 files / EAs
+          $mt4Path = "C:\Program Files\MetaTrader 4 - EXNESS"
+          if (-not (Test-Path $mt4Path)) {
+              $mt4Path = "C:\Program Files (x86)\MetaTrader 4 - EXNESS"
+          }
+          $metaEditorExe = "$mt4Path\metaeditor.exe"
           $roamingPath = "$env:APPDATA\MetaQuotes\Terminal"
 
           if (Test-Path $roamingPath) {
               $terminalFolders = Get-ChildItem -Path $roamingPath -Directory
               foreach ($folder in $terminalFolders) {
-                  $mql5Target = Join-Path $folder.FullName "MQL5"
-                  if (-not (Test-Path $mql5Target)) { New-Item -ItemType Directory -Path $mql5Target -Force | Out-Null }
+                  $mql4Target = Join-Path $folder.FullName "MQL4"
+                  if (-not (Test-Path $mql4Target)) { New-Item -ItemType Directory -Path $mql4Target -Force | Out-Null }
 
-                  Write-Host "Syncing repository code into MT5 MQL5 folder..."
+                  Write-Host "Syncing repository code into MT4 MQL4 folder..."
                   $excludeList = @(".git", ".github", ".claude", ".clinerules")
                   Get-ChildItem -Path $env:GITHUB_WORKSPACE | Where-Object { $excludeList -notcontains $_.Name } | ForEach-Object {
-                      Copy-Item -Path $_.FullName -Destination $mql5Target -Recurse -Force
+                      Copy-Item -Path $_.FullName -Destination $mql4Target -Recurse -Force
                   }
 
-                  $expertsTarget = Join-Path $mql5Target "Experts"
+                  $expertsTarget = Join-Path $mql4Target "Experts"
                   if (-not (Test-Path $expertsTarget)) { New-Item -ItemType Directory -Path $expertsTarget -Force | Out-Null }
-                  Get-ChildItem -Path $env:GITHUB_WORKSPACE -Filter "*.mq5" -Recurse | ForEach-Object {
+                  Get-ChildItem -Path "$env:GITHUB_WORKSPACE" -Filter "*.mq4" -Recurse | ForEach-Object {
                       Copy-Item -Path $_.FullName -Destination $expertsTarget -Force
                   }
 
-                  # MetaEditor project compilation
-                  $projFiles = Get-ChildItem -Path $mql5Target -Filter "*.mqproj" -Recurse
-                  if ($projFiles.Count -gt 0) {
-                      foreach ($proj in $projFiles) {
-                          Write-Host "Compiling Project: $($proj.FullName)"
-                          $proc = Start-Process -FilePath $metaEditorExe -ArgumentList "/compile:`"$($proj.FullName)`"" -PassThru
+                  # MetaEditor project/mq4 compilation
+                  $mq4Files = Get-ChildItem -Path $mql4Target -Filter "*.mq4" -Recurse
+                  if ($mq4Files.Count -gt 0 -and (Test-Path $metaEditorExe)) {
+                      foreach ($mq4 in $mq4Files) {
+                          Write-Host "Compiling Expert Advisor: $($mq4.FullName)"
+                          $proc = Start-Process -FilePath $metaEditorExe -ArgumentList "/compile:`"$($mq4.FullName)`"" -PassThru
                           $timeoutSec = 20
                           $sw = [System.Diagnostics.Stopwatch]::StartNew()
                           while (-not $proc.HasExited -and $sw.Elapsed.TotalSeconds -lt $timeoutSec) {
@@ -178,33 +176,34 @@ jobs:
               }
           }
 
-          # 4. Create run_all.bat for starting MT5 and Python Bot
+          # 4. Create run_all.bat for starting MT4 and Python Bot
           $batPath = Join-Path $desktopPath "run_all.bat"
           $batContent = @"
           @echo off
-          title Exness MT5 & Python XAUUSDm Bot Runner
+          title Exness MT4 & Python XAUUSDm Bot Runner
           echo ========================================================
-          echo    Starting Exness MT5 & Python XAUUSDm Automation
+          echo    Starting Exness MT4 & Python XAUUSDm Automation
           echo ========================================================
 
-          set "MT5_PATH=C:\Program Files\MetaTrader 5 - EXNESS"
-          set "TERMINAL=%MT5_PATH%\terminal64.exe"
-          set "CONFIG_FILE=%~dp0mt5_live_config.ini"
+          set "MT4_PATH=C:\Program Files\MetaTrader 4 - EXNESS"
+          if not exist "%MT4_PATH%" set "MT4_PATH=C:\Program Files (x86)\MetaTrader 4 - EXNESS"
+          set "TERMINAL=%MT4_PATH%\terminal.exe"
+          set "CONFIG_FILE=%~dp0mt4_live_config.ini"
 
           :: 1. Stop existing instances
-          taskkill /F /IM terminal64.exe 2>nul
+          taskkill /F /IM terminal.exe 2>nul
           timeout /t 2 /nobreak >nul
 
-          :: 2. Launch MT5 Profile Initialization
-          echo [1/3] Initializing MT5 Profile...
+          :: 2. Launch MT4 Profile Initialization
+          echo [1/3] Initializing MT4 Profile...
           start "" "%TERMINAL%"
           timeout /t 5 /nobreak >nul
-          taskkill /F /IM terminal64.exe 2>nul
+          taskkill /F /IM terminal.exe 2>nul
           timeout /t 2 /nobreak >nul
 
-          :: 3. Launching MT5 with Live Trading Config
-          echo [2/3] Launching MetaTrader 5 with Config (XAUUSDm)...
-          start "" "%TERMINAL%" "/config:%CONFIG_FILE%"
+          :: 3. Launching MT4 with Live Trading Config
+          echo [2/3] Launching MetaTrader 4 with Config (XAUUSDm)...
+          start "" "%TERMINAL%" "%CONFIG_FILE%"
           timeout /t 5 /nobreak >nul
 
           :: 4. Launching Python Trading Bot Script
@@ -212,7 +211,7 @@ jobs:
           start "Python XAUUSDm Bot" cmd /k "python "C:\XAUBOT_FF\JGVFXMARKETXAUUSD.py""
 
           echo ========================================================
-          echo    Success! MT5 and Python Bot are running live.
+          echo    Success! MT4 and Python Bot are running live.
           echo ========================================================
           "@
 
@@ -235,6 +234,6 @@ jobs:
           Write-Host ""
 
           while ($true) {
-              Write-Host "[(Get-Date)] RDP Active - Server & MT5 Bot running..."
+              Write-Host "[(Get-Date)] RDP Active - Server & MT4 Bot running..."
               Start-Sleep -Seconds 300
           }
