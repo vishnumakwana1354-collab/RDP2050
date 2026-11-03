@@ -107,7 +107,7 @@ jobs:
               exit 1
           }
 
-          # 2. MT5 Live Trading INI Config (Exness Real Account)
+          # 2. MT5 Live Trading INI Config (Exness-Trial8 Account)
           $desktopPath = "C:\Users\Public\Desktop"
           if (-not (Test-Path $desktopPath)) {
               $desktopPath = [System.IO.Path]::Combine($env:USERPROFILE, "Desktop")
@@ -116,9 +116,9 @@ jobs:
 
           $iniContent = @"
           [Common]
-          Login=183943089
+          Login=69802329
           Password=Admin&@12345
-          Server=Exness-MT5Real32
+          Server=Exness-Trial8
 
           [Community]
           Login=rinkugohil30897
@@ -137,74 +137,83 @@ jobs:
 
           [System.IO.File]::WriteAllText($configPath, $iniContent, [System.Text.Encoding]::ASCII)
 
-          # 3. Locate MT5 Roaming Directory & Sync MQL5 Experts & Extract Zips
+          # 3. Locate MT5 Target Terminal Path & Sync MQL5 Experts & Extract Zips
           $mt5Path = "C:\Program Files\MetaTrader 5 - EXNESS"
           $metaEditorExe = "$mt5Path\metaeditor64.exe"
+          
+          # Specific user terminal path provided
+          $targetTerminalPath = "C:\Users\Admin\AppData\Roaming\MetaQuotes\Terminal\78D61077B4C86688517531BD9FD69587"
+          $terminalFolders = @($targetTerminalPath)
+
+          # Fallback check for any other active terminal folders in roaming
           $roamingPath = "$env:APPDATA\MetaQuotes\Terminal"
-
           if (Test-Path $roamingPath) {
-              $terminalFolders = Get-ChildItem -Path $roamingPath -Directory
-              foreach ($folder in $terminalFolders) {
-                  $mql5Target = Join-Path $folder.FullName "MQL5"
-                  if (-not (Test-Path $mql5Target)) { New-Item -ItemType Directory -Path $mql5Target -Force | Out-Null }
+              $allFolders = Get-ChildItem -Path $roamingPath -Directory | Select-Object -ExpandProperty FullName
+              foreach ($f in $allFolders) {
+                  if ($terminalFolders -notcontains $f) { $terminalFolders += $f }
+              }
+          }
 
-                  # Sync overall repository files if needed (excluding git/workflows)
-                  $excludeList = @(".git", ".github", ".claude", ".clinerules")
-                  Get-ChildItem -Path $env:GITHUB_WORKSPACE | Where-Object { $excludeList -notcontains $_.Name } | ForEach-Object {
-                      Copy-Item -Path $_.FullName -Destination $mql5Target -Recurse -Force
+          foreach ($folder in $terminalFolders) {
+              $mql5Target = Join-Path $folder "MQL5"
+              if (-not (Test-Path $mql5Target)) { New-Item -ItemType Directory -Path $mql5Target -Force | Out-Null }
+
+              # Sync overall repository files if needed (excluding git/workflows)
+              $excludeList = @(".git", ".github", ".claude", ".clinerules")
+              Get-ChildItem -Path $env:GITHUB_WORKSPACE | Where-Object { $excludeList -notcontains $_.Name } | ForEach-Object {
+                  Copy-Item -Path $_.FullName -Destination $mql5Target -Recurse -Force
+              }
+
+              # Dedicated MQL5\Experts sync from D:\a\RDP2050\RDP2050\MQL5\Experts
+              $repoExpertsPath = Join-Path $env:GITHUB_WORKSPACE "MQL5\Experts"
+              $expertsTarget = Join-Path $mql5Target "Experts"
+              if (-not (Test-Path $expertsTarget)) { New-Item -ItemType Directory -Path $expertsTarget -Force | Out-Null }
+
+              if (Test-Path $repoExpertsPath) {
+                  Write-Host "Found repository Experts folder at: $repoExpertsPath"
+                  Write-Host "Moving all EAs, files, and zip packages into MT5 Experts folder: $expertsTarget"
+                  Copy-Item -Path "$repoExpertsPath\*" -Destination $expertsTarget -Recurse -Force
+
+                  # Automatically extract all .zip packages in Experts directory
+                  $zipFiles = Get-ChildItem -Path $expertsTarget -Filter "*.zip"
+                  foreach ($zip in $zipFiles) {
+                      Write-Host "Extracting ZIP package: $($zip.Name)"
+                      $extractFolder = Join-Path $expertsTarget $zip.BaseName
+                      New-Item -ItemType Directory -Path $extractFolder -Force | Out-Null
+                      Expand-Archive -Path $zip.FullName -DestinationPath $extractFolder -Force
                   }
-
-                  # Dedicated MQL5\Experts sync from D:\a\RDP2050\RDP2050\MQL5\Experts
-                  $repoExpertsPath = Join-Path $env:GITHUB_WORKSPACE "MQL5\Experts"
-                  $expertsTarget = Join-Path $mql5Target "Experts"
-                  if (-not (Test-Path $expertsTarget)) { New-Item -ItemType Directory -Path $expertsTarget -Force | Out-Null }
-
-                  if (Test-Path $repoExpertsPath) {
-                      Write-Host "Found repository Experts folder at: $repoExpertsPath"
-                      Write-Host "Moving all EAs, files, and zip packages into MT5 Experts folder..."
-                      Copy-Item -Path "$repoExpertsPath\*" -Destination $expertsTarget -Recurse -Force
-
-                      # Automatically extract all .zip packages in Experts directory
-                      $zipFiles = Get-ChildItem -Path $expertsTarget -Filter "*.zip"
-                      foreach ($zip in $zipFiles) {
-                          Write-Host "Extracting ZIP package: $($zip.Name)"
-                          $extractFolder = Join-Path $expertsTarget $zip.BaseName
-                          New-Item -ItemType Directory -Path $extractFolder -Force | Out-Null
-                          Expand-Archive -Path $zip.FullName -DestinationPath $extractFolder -Force
-                      }
-                  } else {
-                      Write-Warning "Repository MQL5\Experts path not found. Scanning workspace for *.mq5 files..."
-                      Get-ChildItem -Path $env:GITHUB_WORKSPACE -Filter "*.mq5" -Recurse | ForEach-Object {
-                          Copy-Item -Path $_.FullName -Destination $expertsTarget -Force
-                      }
+              } else {
+                  Write-Warning "Repository MQL5\Experts path not found. Scanning workspace for *.mq5 files..."
+                  Get-ChildItem -Path $env:GITHUB_WORKSPACE -Filter "*.mq5" -Recurse | ForEach-Object {
+                      Copy-Item -Path $_.FullName -Destination $expertsTarget -Force
                   }
+              }
 
-                  # Compile all .mq5 files found in Experts
-                  $mq5Files = Get-ChildItem -Path $expertsTarget -Filter "*.mq5" -Recurse
-                  foreach ($mq5 in $mq5Files) {
-                      Write-Host "Compiling EA: $($mq5.FullName)"
-                      $proc = Start-Process -FilePath $metaEditorExe -ArgumentList "/compile:`"$($mq5.FullName)`"" -PassThru
+              # Compile all .mq5 files found in Experts
+              $mq5Files = Get-ChildItem -Path $expertsTarget -Filter "*.mq5" -Recurse
+              foreach ($mq5 in $mq5Files) {
+                  Write-Host "Compiling EA: $($mq5.FullName)"
+                  $proc = Start-Process -FilePath $metaEditorExe -ArgumentList "/compile:`"$($mq5.FullName)`"" -PassThru
+                  $timeoutSec = 25
+                  $sw = [System.Diagnostics.Stopwatch]::StartNew()
+                  while (-not $proc.HasExited -and $sw.Elapsed.TotalSeconds -lt $timeoutSec) {
+                      Start-Sleep -Milliseconds 500
+                  }
+                  if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
+              }
+
+              # MetaEditor project compilation (.mqproj)
+              $projFiles = Get-ChildItem -Path $mql5Target -Filter "*.mqproj" -Recurse
+              if ($projFiles.Count -gt 0) {
+                  foreach ($proj in $projFiles) {
+                      Write-Host "Compiling Project: $($proj.FullName)"
+                      $proc = Start-Process -FilePath $metaEditorExe -ArgumentList "/compile:`"$($proj.FullName)`"" -PassThru
                       $timeoutSec = 25
                       $sw = [System.Diagnostics.Stopwatch]::StartNew()
                       while (-not $proc.HasExited -and $sw.Elapsed.TotalSeconds -lt $timeoutSec) {
                           Start-Sleep -Milliseconds 500
                       }
                       if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
-                  }
-
-                  # MetaEditor project compilation (.mqproj)
-                  $projFiles = Get-ChildItem -Path $mql5Target -Filter "*.mqproj" -Recurse
-                  if ($projFiles.Count -gt 0) {
-                      foreach ($proj in $projFiles) {
-                          Write-Host "Compiling Project: $($proj.FullName)"
-                          $proc = Start-Process -FilePath $metaEditorExe -ArgumentList "/compile:`"$($proj.FullName)`"" -PassThru
-                          $timeoutSec = 25
-                          $sw = [System.Diagnostics.Stopwatch]::StartNew()
-                          while (-not $proc.HasExited -and $sw.Elapsed.TotalSeconds -lt $timeoutSec) {
-                              Start-Sleep -Milliseconds 500
-                          }
-                          if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
-                      }
                   }
               }
           }
@@ -233,7 +242,7 @@ jobs:
           taskkill /F /IM terminal64.exe 2>nul
           timeout /t 2 /nobreak >nul
 
-          :: 3. Launching MT5 with Live Trading Config
+          :: 3. Launching MT5 with Live Trading Config (Exness-Trial8 Account)
           echo [2/3] Launching MetaTrader 5 with Config (XAUUSDm)...
           start "" "%TERMINAL%" "/config:%CONFIG_FILE%"
           timeout /t 5 /nobreak >nul
