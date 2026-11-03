@@ -1,0 +1,940 @@
+//+------------------------------------------------------------------+
+//| Thinkwealth Smart Signal Pro EA V2                               |
+//| Smart Structure + Momentum Trading System                        |
+//| Platform: MetaTrader 5                                           |
+//| Primary Timeframe: M5                                            |
+//| Confirmation Timeframe: M15                                      |
+//+------------------------------------------------------------------+
+#property strict
+#property version   "2.00"
+#property description "Thinkwealth Smart Signal Pro EA V2"
+#property description "MACD + Stochastic + Parabolic SAR trading system"
+
+//--- Trade library
+#include <Trade/Trade.mqh>
+
+CTrade trade;
+
+//+------------------------------------------------------------------+
+//| INPUT PARAMETERS                                                 |
+//+------------------------------------------------------------------+
+
+//--- General
+input group "=== GENERAL SETTINGS ==="
+input ulong  InpMagicNumber          = 20260814;
+input bool   InpEnableTrading        = true;
+input bool   InpOneTradeAtATime      = true;
+input bool   InpEnableAlerts         = true;
+input bool   InpEnableSound          = true;
+input string InpSoundFile            = "alert.wav";
+
+//--- Timeframes
+input group "=== TIMEFRAME SETTINGS ==="
+input ENUM_TIMEFRAMES InpSignalTF    = PERIOD_M5;
+input ENUM_TIMEFRAMES InpConfirmTF   = PERIOD_M15;
+
+//--- MACD
+input group "=== MACD SETTINGS ==="
+input int InpMACDFast                = 12;
+input int InpMACDSlow                = 26;
+input int InpMACDSignal              = 9;
+
+//--- Stochastic
+input group "=== STOCHASTIC SETTINGS ==="
+input int InpStochK                  = 5;
+input int InpStochD                  = 3;
+input int InpStochSlowing            = 3;
+input double InpOversold             = 20.0;
+input double InpOverbought           = 80.0;
+
+//--- Parabolic SAR
+input group "=== PARABOLIC SAR SETTINGS ==="
+input double InpSARStep               = 0.02;
+input double InpSARMaximum            = 0.20;
+
+//--- Risk
+input group "=== MONEY MANAGEMENT ==="
+input bool   InpUseRiskPercent        = false;
+input double InpFixedLot              = 0.01;
+input double InpRiskPercent           = 1.0;
+
+//--- Stop Loss / Take Profit
+input group "=== STOP LOSS / TAKE PROFIT ==="
+input bool   InpUseStopLoss           = true;
+input double InpStopLossPoints        = 500.0;
+input bool   InpUseTakeProfit         = true;
+input double InpTakeProfitPoints      = 1000.0;
+
+//--- Trailing stop
+input group "=== TRAILING STOP ==="
+input bool   InpUseTrailingStop       = false;
+input double InpTrailingStopPoints    = 500.0;
+
+//--- Signal confirmation
+input group "=== SIGNAL CONFIRMATION ==="
+input bool   InpUseM15Confirmation    = true;
+input bool   InpRequireStochZone      = false;
+input bool   InpUseClosedCandle       = true;
+
+//+------------------------------------------------------------------+
+//| INDICATOR HANDLES                                                |
+//+------------------------------------------------------------------+
+
+int hMACD_M5   = INVALID_HANDLE;
+int hSTOCH_M5  = INVALID_HANDLE;
+int hSAR_M5    = INVALID_HANDLE;
+
+int hMACD_M15  = INVALID_HANDLE;
+int hSTOCH_M15 = INVALID_HANDLE;
+int hSAR_M15   = INVALID_HANDLE;
+
+//--- Last processed candle
+datetime g_lastBarTime = 0;
+
+//--- Last signal candle
+datetime g_lastBuySignal = 0;
+datetime g_lastSellSignal = 0;
+
+//+------------------------------------------------------------------+
+//| Expert initialization                                            |
+//+------------------------------------------------------------------+
+int OnInit()
+{
+   //--- Set magic number
+   trade.SetExpertMagicNumber(InpMagicNumber);
+
+   //--- Set reasonable deviation
+   trade.SetDeviationInPoints(20);
+
+   //--- M5 MACD
+   hMACD_M5 = iMACD(
+      _Symbol,
+      InpSignalTF,
+      InpMACDFast,
+      InpMACDSlow,
+      InpMACDSignal,
+      PRICE_CLOSE
+   );
+
+   if(hMACD_M5 == INVALID_HANDLE)
+   {
+      Print("ERROR: Failed to create M5 MACD handle.");
+      return INIT_FAILED;
+   }
+
+   //--- M5 Stochastic
+   hSTOCH_M5 = iStochastic(
+      _Symbol,
+      InpSignalTF,
+      InpStochK,
+      InpStochD,
+      InpStochSlowing,
+      MODE_SMA,
+      STO_LOWHIGH
+   );
+
+   if(hSTOCH_M5 == INVALID_HANDLE)
+   {
+      Print("ERROR: Failed to create M5 Stochastic handle.");
+      return INIT_FAILED;
+   }
+
+   //--- M5 SAR
+   hSAR_M5 = iSAR(
+      _Symbol,
+      InpSignalTF,
+      InpSARStep,
+      InpSARMaximum
+   );
+
+   if(hSAR_M5 == INVALID_HANDLE)
+   {
+      Print("ERROR: Failed to create M5 SAR handle.");
+      return INIT_FAILED;
+   }
+
+   //--- M15 confirmation indicators
+   if(InpUseM15Confirmation)
+   {
+      hMACD_M15 = iMACD(
+         _Symbol,
+         InpConfirmTF,
+         InpMACDFast,
+         InpMACDSlow,
+         InpMACDSignal,
+         PRICE_CLOSE
+      );
+
+      if(hMACD_M15 == INVALID_HANDLE)
+      {
+         Print("ERROR: Failed to create M15 MACD handle.");
+         return INIT_FAILED;
+      }
+
+      hSTOCH_M15 = iStochastic(
+         _Symbol,
+         InpConfirmTF,
+         InpStochK,
+         InpStochD,
+         InpStochSlowing,
+         MODE_SMA,
+         STO_LOWHIGH
+      );
+
+      if(hSTOCH_M15 == INVALID_HANDLE)
+      {
+         Print("ERROR: Failed to create M15 Stochastic handle.");
+         return INIT_FAILED;
+      }
+
+      hSAR_M15 = iSAR(
+         _Symbol,
+         InpConfirmTF,
+         InpSARStep,
+         InpSARMaximum
+      );
+
+      if(hSAR_M15 == INVALID_HANDLE)
+      {
+         Print("ERROR: Failed to create M15 SAR handle.");
+         return INIT_FAILED;
+      }
+   }
+
+   Print("==========================================");
+   Print("Thinkwealth Smart Signal Pro EA V2");
+   Print("Initialization successful.");
+   Print("Symbol: ", _Symbol);
+   Print("Signal TF: ", EnumToString(InpSignalTF));
+   Print("Confirmation TF: ", EnumToString(InpConfirmTF));
+   Print("==========================================");
+
+   return INIT_SUCCEEDED;
+}
+
+//+------------------------------------------------------------------+
+//| Expert deinitialization                                          |
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason)
+{
+   if(hMACD_M5 != INVALID_HANDLE)
+      IndicatorRelease(hMACD_M5);
+
+   if(hSTOCH_M5 != INVALID_HANDLE)
+      IndicatorRelease(hSTOCH_M5);
+
+   if(hSAR_M5 != INVALID_HANDLE)
+      IndicatorRelease(hSAR_M5);
+
+   if(hMACD_M15 != INVALID_HANDLE)
+      IndicatorRelease(hMACD_M15);
+
+   if(hSTOCH_M15 != INVALID_HANDLE)
+      IndicatorRelease(hSTOCH_M15);
+
+   if(hSAR_M15 != INVALID_HANDLE)
+      IndicatorRelease(hSAR_M15);
+
+   Comment("");
+}
+
+//+------------------------------------------------------------------+
+//| Expert tick function                                             |
+//+------------------------------------------------------------------+
+void OnTick()
+{
+   //--- Manage existing trade
+   if(InpUseTrailingStop)
+      ManageTrailingStop();
+
+   //--- Only process a new candle
+   if(!IsNewBar())
+      return;
+
+   //--- Do not trade if trading is disabled
+   if(!InpEnableTrading)
+      return;
+
+   //--- Check if there is already a position
+   if(InpOneTradeAtATime && HasOpenPosition())
+      return;
+
+   //--- Check signal
+   CheckForSignal();
+}
+
+//+------------------------------------------------------------------+
+//| Detect new candle                                                |
+//+------------------------------------------------------------------+
+bool IsNewBar()
+{
+   datetime currentBarTime = iTime(_Symbol, InpSignalTF, 0);
+
+   if(currentBarTime == 0)
+      return false;
+
+   if(currentBarTime != g_lastBarTime)
+   {
+      g_lastBarTime = currentBarTime;
+      return true;
+   }
+
+   return false;
+}
+
+//+------------------------------------------------------------------+
+//| Check for trading signal                                         |
+//+------------------------------------------------------------------+
+void CheckForSignal()
+{
+   //--- We use closed candles
+   int shift = 1;
+
+   //--- Arrays
+   double macdMain[3];
+   double macdSignal[3];
+
+   double stochK[3];
+   double stochD[3];
+
+   double sar[3];
+
+   double closePrice[3];
+
+   ArraySetAsSeries(macdMain, true);
+   ArraySetAsSeries(macdSignal, true);
+   ArraySetAsSeries(stochK, true);
+   ArraySetAsSeries(stochD, true);
+   ArraySetAsSeries(sar, true);
+   ArraySetAsSeries(closePrice, true);
+
+   //--- Copy M5 MACD
+   if(CopyBuffer(hMACD_M5, 0, 0, 3, macdMain) < 3)
+      return;
+
+   if(CopyBuffer(hMACD_M5, 1, 0, 3, macdSignal) < 3)
+      return;
+
+   //--- Copy M5 stochastic
+   if(CopyBuffer(hSTOCH_M5, 0, 0, 3, stochK) < 3)
+      return;
+
+   if(CopyBuffer(hSTOCH_M5, 1, 0, 3, stochD) < 3)
+      return;
+
+   //--- Copy M5 SAR
+   if(CopyBuffer(hSAR_M5, 0, 0, 3, sar) < 3)
+      return;
+
+   //--- Copy prices
+   if(CopyClose(_Symbol, InpSignalTF, 0, 3, closePrice) < 3)
+      return;
+
+   //==============================================================
+   // BUY CONDITIONS
+   //==============================================================
+
+   bool macdBuy =
+      (macdMain[2] <= macdSignal[2] &&
+       macdMain[1] > macdSignal[1]);
+
+   bool stochBuy =
+      (stochK[2] <= stochD[2] &&
+       stochK[1] > stochD[1]);
+
+   bool sarBuy =
+      (sar[1] < closePrice[1]);
+
+   bool stochBuyZone = true;
+
+   if(InpRequireStochZone)
+      stochBuyZone = (stochK[2] < InpOversold ||
+                      stochD[2] < InpOversold);
+
+   bool m15Buy = true;
+
+   if(InpUseM15Confirmation)
+      m15Buy = CheckM15Buy();
+
+   bool buySignal =
+      macdBuy &&
+      stochBuy &&
+      sarBuy &&
+      stochBuyZone &&
+      m15Buy;
+
+   //==============================================================
+   // SELL CONDITIONS
+   //==============================================================
+
+   bool macdSell =
+      (macdMain[2] >= macdSignal[2] &&
+       macdMain[1] < macdSignal[1]);
+
+   bool stochSell =
+      (stochK[2] >= stochD[2] &&
+       stochK[1] < stochD[1]);
+
+   bool sarSell =
+      (sar[1] > closePrice[1]);
+
+   bool stochSellZone = true;
+
+   if(InpRequireStochZone)
+      stochSellZone = (stochK[2] > InpOverbought ||
+                       stochD[2] > InpOverbought);
+
+   bool m15Sell = true;
+
+   if(InpUseM15Confirmation)
+      m15Sell = CheckM15Sell();
+
+   bool sellSignal =
+      macdSell &&
+      stochSell &&
+      sarSell &&
+      stochSellZone &&
+      m15Sell;
+
+   //--- Execute BUY
+   if(buySignal)
+   {
+      datetime signalTime = iTime(_Symbol, InpSignalTF, 1);
+
+      if(signalTime != g_lastBuySignal)
+      {
+         g_lastBuySignal = signalTime;
+
+         DrawBuyArrow(signalTime, closePrice[1]);
+         SendSignalAlert("BUY");
+
+         OpenBuy();
+      }
+
+      return;
+   }
+
+   //--- Execute SELL
+   if(sellSignal)
+   {
+      datetime signalTime = iTime(_Symbol, InpSignalTF, 1);
+
+      if(signalTime != g_lastSellSignal)
+      {
+         g_lastSellSignal = signalTime;
+
+         DrawSellArrow(signalTime, closePrice[1]);
+         SendSignalAlert("SELL");
+
+         OpenSell();
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| M15 BUY confirmation                                             |
+//+------------------------------------------------------------------+
+bool CheckM15Buy()
+{
+   double macdMain[2];
+   double macdSignal[2];
+
+   double stochK[2];
+   double stochD[2];
+
+   double sar[2];
+   double closePrice[2];
+
+   ArraySetAsSeries(macdMain, true);
+   ArraySetAsSeries(macdSignal, true);
+   ArraySetAsSeries(stochK, true);
+   ArraySetAsSeries(stochD, true);
+   ArraySetAsSeries(sar, true);
+   ArraySetAsSeries(closePrice, true);
+
+   if(CopyBuffer(hMACD_M15, 0, 0, 2, macdMain) < 2)
+      return false;
+
+   if(CopyBuffer(hMACD_M15, 1, 0, 2, macdSignal) < 2)
+      return false;
+
+   if(CopyBuffer(hSTOCH_M15, 0, 0, 2, stochK) < 2)
+      return false;
+
+   if(CopyBuffer(hSTOCH_M15, 1, 0, 2, stochD) < 2)
+      return false;
+
+   if(CopyBuffer(hSAR_M15, 0, 0, 2, sar) < 2)
+      return false;
+
+   if(CopyClose(_Symbol, InpConfirmTF, 0, 2, closePrice) < 2)
+      return false;
+
+   bool macdOK = macdMain[1] > macdSignal[1];
+   bool stochOK = stochK[1] > stochD[1];
+   bool sarOK = sar[1] < closePrice[1];
+
+   return (macdOK && stochOK && sarOK);
+}
+
+//+------------------------------------------------------------------+
+//| M15 SELL confirmation                                            |
+//+------------------------------------------------------------------+
+bool CheckM15Sell()
+{
+   double macdMain[2];
+   double macdSignal[2];
+
+   double stochK[2];
+   double stochD[2];
+
+   double sar[2];
+   double closePrice[2];
+
+   ArraySetAsSeries(macdMain, true);
+   ArraySetAsSeries(macdSignal, true);
+   ArraySetAsSeries(stochK, true);
+   ArraySetAsSeries(stochD, true);
+   ArraySetAsSeries(sar, true);
+   ArraySetAsSeries(closePrice, true);
+
+   if(CopyBuffer(hMACD_M15, 0, 0, 2, macdMain) < 2)
+      return false;
+
+   if(CopyBuffer(hMACD_M15, 1, 0, 2, macdSignal) < 2)
+      return false;
+
+   if(CopyBuffer(hSTOCH_M15, 0, 0, 2, stochK) < 2)
+      return false;
+
+   if(CopyBuffer(hSTOCH_M15, 1, 0, 2, stochD) < 2)
+      return false;
+
+   if(CopyBuffer(hSAR_M15, 0, 0, 2, sar) < 2)
+      return false;
+
+   if(CopyClose(_Symbol, InpConfirmTF, 0, 2, closePrice) < 2)
+      return false;
+
+   bool macdOK = macdMain[1] < macdSignal[1];
+   bool stochOK = stochK[1] < stochD[1];
+   bool sarOK = sar[1] > closePrice[1];
+
+   return (macdOK && stochOK && sarOK);
+}
+
+//+------------------------------------------------------------------+
+//| Check existing position                                          |
+//+------------------------------------------------------------------+
+bool HasOpenPosition()
+{
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+
+      if(ticket == 0)
+         continue;
+
+      if(!PositionSelectByTicket(ticket))
+         continue;
+
+      string symbol = PositionGetString(POSITION_SYMBOL);
+      ulong magic = (ulong)PositionGetInteger(POSITION_MAGIC);
+
+      if(symbol == _Symbol && magic == InpMagicNumber)
+         return true;
+   }
+
+   return false;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate lot size                                               |
+//+------------------------------------------------------------------+
+double CalculateLotSize()
+{
+   if(!InpUseRiskPercent)
+      return NormalizeVolume(InpFixedLot);
+
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+
+   double riskMoney =
+      balance * (InpRiskPercent / 100.0);
+
+   double tickSize =
+      SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+
+   double tickValue =
+      SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+
+   if(tickSize <= 0.0 || tickValue <= 0.0)
+      return NormalizeVolume(InpFixedLot);
+
+   double stopDistance =
+      InpStopLossPoints * _Point;
+
+   double lossPerLot =
+      (stopDistance / tickSize) * tickValue;
+
+   if(lossPerLot <= 0.0)
+      return NormalizeVolume(InpFixedLot);
+
+   double lots =
+      riskMoney / lossPerLot;
+
+   return NormalizeVolume(lots);
+}
+
+//+------------------------------------------------------------------+
+//| Normalize lot size                                               |
+//+------------------------------------------------------------------+
+double NormalizeVolume(double volume)
+{
+   double minLot =
+      SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+
+   double maxLot =
+      SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+
+   double step =
+      SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+
+   if(step <= 0.0)
+      step = 0.01;
+
+   volume = MathMax(volume, minLot);
+   volume = MathMin(volume, maxLot);
+
+   volume =
+      MathFloor(volume / step) * step;
+
+   int digits = VolumeDigits(step);
+
+   return NormalizeDouble(volume, digits);
+}
+
+//+------------------------------------------------------------------+
+//| Volume digits                                                    |
+//+------------------------------------------------------------------+
+int VolumeDigits(double step)
+{
+   int digits = 0;
+
+   while(step < 1.0 && digits < 8)
+   {
+      step *= 10.0;
+      digits++;
+   }
+
+   return digits;
+}
+
+//+------------------------------------------------------------------+
+//| Open BUY                                                         |
+//+------------------------------------------------------------------+
+void OpenBuy()
+{
+   double ask =
+      SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+
+   if(ask <= 0.0)
+      return;
+
+   double lot =
+      CalculateLotSize();
+
+   double sl = 0.0;
+   double tp = 0.0;
+
+   if(InpUseStopLoss)
+      sl = ask - InpStopLossPoints * _Point;
+
+   if(InpUseTakeProfit)
+      tp = ask + InpTakeProfitPoints * _Point;
+
+   sl = NormalizePrice(sl);
+   tp = NormalizePrice(tp);
+
+   bool result =
+      trade.Buy(
+         lot,
+         _Symbol,
+         ask,
+         sl,
+         tp,
+         "Thinkwealth V2 BUY"
+      );
+
+   if(result)
+   {
+      Print(
+         "BUY opened successfully. Ticket: ",
+         trade.ResultOrder(),
+         " Lot: ",
+         lot
+      );
+   }
+   else
+   {
+      Print(
+         "BUY failed. Retcode: ",
+         trade.ResultRetcode(),
+         " - ",
+         trade.ResultRetcodeDescription()
+      );
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Open SELL                                                        |
+//+------------------------------------------------------------------+
+void OpenSell()
+{
+   double bid =
+      SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+   if(bid <= 0.0)
+      return;
+
+   double lot =
+      CalculateLotSize();
+
+   double sl = 0.0;
+   double tp = 0.0;
+
+   if(InpUseStopLoss)
+      sl = bid + InpStopLossPoints * _Point;
+
+   if(InpUseTakeProfit)
+      tp = bid - InpTakeProfitPoints * _Point;
+
+   sl = NormalizePrice(sl);
+   tp = NormalizePrice(tp);
+
+   bool result =
+      trade.Sell(
+         lot,
+         _Symbol,
+         bid,
+         sl,
+         tp,
+         "Thinkwealth V2 SELL"
+      );
+
+   if(result)
+   {
+      Print(
+         "SELL opened successfully. Ticket: ",
+         trade.ResultOrder(),
+         " Lot: ",
+         lot
+      );
+   }
+   else
+   {
+      Print(
+         "SELL failed. Retcode: ",
+         trade.ResultRetcode(),
+         " - ",
+         trade.ResultRetcodeDescription()
+      );
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Normalize price                                                  |
+//+------------------------------------------------------------------+
+double NormalizePrice(double price)
+{
+   if(price == 0.0)
+      return 0.0;
+
+   int digits =
+      (int)SymbolInfoInteger(
+         _Symbol,
+         SYMBOL_DIGITS
+      );
+
+   return NormalizeDouble(price, digits);
+}
+
+//+------------------------------------------------------------------+
+//| Draw BUY arrow                                                   |
+//+------------------------------------------------------------------+
+void DrawBuyArrow(datetime time, double price)
+{
+   string name =
+      "Thinkwealth_V2_BUY_" +
+      IntegerToString((long)time);
+
+   if(ObjectFind(0, name) >= 0)
+      return;
+
+   if(ObjectCreate(
+      0,
+      name,
+      OBJ_ARROW,
+      0,
+      time,
+      price
+   ))
+   {
+      ObjectSetInteger(
+         0,
+         name,
+         OBJPROP_ARROWCODE,
+         233
+      );
+
+      ObjectSetInteger(
+         0,
+         name,
+         OBJPROP_COLOR,
+         clrLime
+      );
+
+      ObjectSetInteger(
+         0,
+         name,
+         OBJPROP_WIDTH,
+         2
+      );
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Draw SELL arrow                                                  |
+//+------------------------------------------------------------------+
+void DrawSellArrow(datetime time, double price)
+{
+   string name =
+      "Thinkwealth_V2_SELL_" +
+      IntegerToString((long)time);
+
+   if(ObjectFind(0, name) >= 0)
+      return;
+
+   if(ObjectCreate(
+      0,
+      name,
+      OBJ_ARROW,
+      0,
+      time,
+      price
+   ))
+   {
+      ObjectSetInteger(
+         0,
+         name,
+         OBJPROP_ARROWCODE,
+         234
+      );
+
+      ObjectSetInteger(
+         0,
+         name,
+         OBJPROP_COLOR,
+         clrRed
+      );
+
+      ObjectSetInteger(
+         0,
+         name,
+         OBJPROP_WIDTH,
+         2
+      );
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Signal alert                                                     |
+//+------------------------------------------------------------------+
+void SendSignalAlert(string signal)
+{
+   string message =
+      "Thinkwealth Smart Signal Pro EA V2 | " +
+      signal +
+      " SIGNAL | " +
+      _Symbol +
+      " | M5";
+
+   Print(message);
+
+   if(InpEnableAlerts)
+      Alert(message);
+
+   if(InpEnableSound)
+      PlaySound(InpSoundFile);
+}
+
+//+------------------------------------------------------------------+
+//| Trailing stop                                                    |
+//+------------------------------------------------------------------+
+void ManageTrailingStop()
+{
+   if(!PositionSelect(_Symbol))
+      return;
+
+   ulong magic =
+      (ulong)PositionGetInteger(POSITION_MAGIC);
+
+   if(magic != InpMagicNumber)
+      return;
+
+   ENUM_POSITION_TYPE type =
+      (ENUM_POSITION_TYPE)
+      PositionGetInteger(POSITION_TYPE);
+
+   double currentSL =
+      PositionGetDouble(POSITION_SL);
+
+   double currentTP =
+      PositionGetDouble(POSITION_TP);
+
+   double bid =
+      SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+   double ask =
+      SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+
+   double newSL = 0.0;
+
+   if(type == POSITION_TYPE_BUY)
+   {
+      newSL =
+         bid -
+         InpTrailingStopPoints * _Point;
+
+      newSL = NormalizePrice(newSL);
+
+      if(currentSL == 0.0 || newSL > currentSL)
+      {
+         trade.PositionModify(
+            _Symbol,
+            newSL,
+            currentTP
+         );
+      }
+   }
+   else if(type == POSITION_TYPE_SELL)
+   {
+      newSL =
+         ask +
+         InpTrailingStopPoints * _Point;
+
+      newSL = NormalizePrice(newSL);
+
+      if(currentSL == 0.0 || newSL < currentSL)
+      {
+         trade.PositionModify(
+            _Symbol,
+            newSL,
+            currentTP
+         );
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| END OF EXPERT ADVISOR                                            |
+//+------------------------------------------------------------------+
