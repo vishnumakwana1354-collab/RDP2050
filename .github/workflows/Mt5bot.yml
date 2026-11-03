@@ -45,8 +45,12 @@ jobs:
           echo "RDP_USER=$username" >> $env:GITHUB_ENV
           echo "RDP_PASS=$password" >> $env:GITHUB_ENV
 
-      - name: Fix Mouse Button Settings (Primary Right Click)
+      - name: Fix Mouse Button Settings (Primary Right Click - Error Fixed)
         run: |
+          # Ensure HKU drive is loaded if accessed, or safely use HKCU
+          if (-not (Test-Path "HKU:\")) {
+              New-PSDrive -Name HKU -PSProvider Registry -Root HKEY_USERS | Out-Null
+          }
           Set-ItemProperty -Path "HKCU:\Control Panel\Mouse" -Name "SwapMouseButtons" -Value "1" -Force
           Set-ItemProperty -Path "HKU:\.DEFAULT\Control Panel\Mouse" -Name "SwapMouseButtons" -Value "1" -Force
           Add-Type -TypeDefinition @'
