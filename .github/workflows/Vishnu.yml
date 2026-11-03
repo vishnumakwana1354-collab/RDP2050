@@ -107,7 +107,7 @@ jobs:
               exit 1
           }
 
-          # 2. MT5 Live Trading INI Config (Exness-Trial8 Account)
+          # 2. MT5 Live Trading INI Config (Exness-Trial8 Account & Algo Trading Enabled)
           $desktopPath = "C:\Users\Public\Desktop"
           if (-not (Test-Path $desktopPath)) {
               $desktopPath = [System.IO.Path]::Combine($env:USERPROFILE, "Desktop")
@@ -119,6 +119,7 @@ jobs:
           Login=69802329
           Password=Admin&@12345
           Server=Exness-Trial8
+          SavePassword=1
 
           [Community]
           Login=rinkugohil30897
@@ -137,15 +138,15 @@ jobs:
 
           [System.IO.File]::WriteAllText($configPath, $iniContent, [System.Text.Encoding]::ASCII)
 
-          # 3. Locate MT5 Target Terminal Path & Sync MQL5 Experts & Extract Zips
+          # 3. Locate Target Terminal Path & Sync MQL5 Experts & Extract Zips & Compile (x64 Regular)
           $mt5Path = "C:\Program Files\MetaTrader 5 - EXNESS"
           $metaEditorExe = "$mt5Path\metaeditor64.exe"
           
-          # Specific user terminal path provided
+          # Exact target terminal path specified by user
           $targetTerminalPath = "C:\Users\Admin\AppData\Roaming\MetaQuotes\Terminal\78D61077B4C86688517531BD9FD69587"
           $terminalFolders = @($targetTerminalPath)
 
-          # Fallback check for any other active terminal folders in roaming
+          # Fallback check for any other terminal folders in roaming
           $roamingPath = "$env:APPDATA\MetaQuotes\Terminal"
           if (Test-Path $roamingPath) {
               $allFolders = Get-ChildItem -Path $roamingPath -Directory | Select-Object -ExpandProperty FullName
@@ -164,7 +165,7 @@ jobs:
                   Copy-Item -Path $_.FullName -Destination $mql5Target -Recurse -Force
               }
 
-              # Dedicated MQL5\Experts sync from D:\a\RDP2050\RDP2050\MQL5\Experts
+              # Dedicated MQL5\Experts sync
               $repoExpertsPath = Join-Path $env:GITHUB_WORKSPACE "MQL5\Experts"
               $expertsTarget = Join-Path $mql5Target "Experts"
               if (-not (Test-Path $expertsTarget)) { New-Item -ItemType Directory -Path $expertsTarget -Force | Out-Null }
@@ -189,10 +190,10 @@ jobs:
                   }
               }
 
-              # Compile all .mq5 files found in Experts
+              # Compile all .mq5 files found in Experts using x64 Regular (metaeditor64.exe)
               $mq5Files = Get-ChildItem -Path $expertsTarget -Filter "*.mq5" -Recurse
               foreach ($mq5 in $mq5Files) {
-                  Write-Host "Compiling EA: $($mq5.FullName)"
+                  Write-Host "Compiling EA (x64 Regular): $($mq5.FullName)"
                   $proc = Start-Process -FilePath $metaEditorExe -ArgumentList "/compile:`"$($mq5.FullName)`"" -PassThru
                   $timeoutSec = 25
                   $sw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -206,7 +207,7 @@ jobs:
               $projFiles = Get-ChildItem -Path $mql5Target -Filter "*.mqproj" -Recurse
               if ($projFiles.Count -gt 0) {
                   foreach ($proj in $projFiles) {
-                      Write-Host "Compiling Project: $($proj.FullName)"
+                      Write-Host "Compiling Project (x64 Regular): $($proj.FullName)"
                       $proc = Start-Process -FilePath $metaEditorExe -ArgumentList "/compile:`"$($proj.FullName)`"" -PassThru
                       $timeoutSec = 25
                       $sw = [System.Diagnostics.Stopwatch]::StartNew()
