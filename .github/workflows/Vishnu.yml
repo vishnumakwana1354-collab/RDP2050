@@ -46,6 +46,20 @@ jobs:
           echo "RDP_USER=$username" >> $env:GITHUB_ENV
           echo "RDP_PASS=$password" >> $env:GITHUB_ENV
 
+      - name: Fix Mouse Button Settings (Primary Left Click)
+        run: |
+          Set-ItemProperty -Path "HKCU:\Control Panel\Mouse" -Name "SwapMouseButtons" -Value "0"
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+          public class MouseSettings {
+              [DllImport("user32.dll")]
+              public static extern bool SwapMouseButton(bool bSwap);
+          }
+          '@
+          [MouseSettings]::SwapMouseButton($false)
+          Write-Host "Mouse primary button successfully set to Left click."
+
       - name: Install Tailscale
         run: |
           $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
@@ -219,7 +233,7 @@ jobs:
               }
           }
 
-          # 4. Create run_all.bat for starting MT5 and Python Bot
+          # 4. Create run_all.bat for starting MT5, Background Wizard Closer, and Python Bot
           $batPath = Join-Path $desktopPath "run_all.bat"
           $batContent = @"
           @echo off
@@ -237,19 +251,23 @@ jobs:
           timeout /t 2 /nobreak >nul
 
           :: 2. Launch MT5 Profile Initialization
-          echo [1/3] Initializing MT5 Profile...
+          echo [1/4] Initializing MT5 Profile...
           start "" "%TERMINAL%"
           timeout /t 5 /nobreak >nul
           taskkill /F /IM terminal64.exe 2>nul
           timeout /t 2 /nobreak >nul
 
-          :: 3. Launching MT5 with Live Trading Config (Exness-Trial8 Account)
-          echo [2/3] Launching MetaTrader 5 with Config (XAUUSDm)...
+          :: 3. Start Background Job to Automatically Dismiss "Open an Account" Wizard
+          echo [2/4] Starting Background Wizard Auto-Closer...
+          start /min powershell -Command "$sig = '[DllImport(\"user32.dll\")] public static extern IntPtr FindWindow(string l, string w); [DllImport(\"user32.dll\")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);'; $type = Add-Type -MemberDefinition $sig -Name 'Win32W' -Namespace 'Bot' -PassThru; while($true) { $hwnd = $type::FindWindow($null, 'Open an Account'); if($hwnd -ne [IntPtr]::Zero) { $type::PostMessage($hwnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero); }; Start-Sleep -Seconds 1; }"
+
+          :: 4. Launching MT5 with Live Trading Config (Exness-Trial8 Account)
+          echo [3/4] Launching MetaTrader 5 with Config (XAUUSDm)...
           start "" "%TERMINAL%" "/config:%CONFIG_FILE%"
           timeout /t 5 /nobreak >nul
 
-          :: 4. Launching Python Trading Bot Script
-          echo [3/3] Launching Python Bot Script (JGVFXMARKETXAUUSD.py)...
+          :: 5. Launching Python Trading Bot Script
+          echo [4/4] Launching Python Bot Script (JGVFXMARKETXAUUSD.py)...
           start "Python XAUUSDm Bot" cmd /k "python "C:\XAUBOT_FF\JGVFXMARKETXAUUSD.py""
 
           echo ========================================================
