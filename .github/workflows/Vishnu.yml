@@ -121,7 +121,7 @@ jobs:
               exit 1
           }
 
-          # 2. MT5 Live Trading INI Config (Exness-Trial8 Account & Algo Trading Enabled)
+          # 2. MT5 Live Trading INI Config (Exness-MT5Trial7 Account)
           $desktopPath = "C:\Users\Public\Desktop"
           if (-not (Test-Path $desktopPath)) {
               $desktopPath = [System.IO.Path]::Combine($env:USERPROFILE, "Desktop")
@@ -130,9 +130,9 @@ jobs:
 
           $iniContent = @"
           [Common]
-          Login=69802329
+          Login=434157116
           Password=Admin&@12345
-          Server=Exness-Trial8
+          Server=Exness-MT5Trial7
           SavePassword=1
 
           [Community]
@@ -261,7 +261,7 @@ jobs:
           echo [2/4] Starting Background Wizard Auto-Closer...
           start /min powershell -Command "$sig = '[DllImport(\"user32.dll\")] public static extern IntPtr FindWindow(string l, string w); [DllImport(\"user32.dll\")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);'; $type = Add-Type -MemberDefinition $sig -Name 'Win32W' -Namespace 'Bot' -PassThru; while($true) { $hwnd = $type::FindWindow($null, 'Open an Account'); if($hwnd -ne [IntPtr]::Zero) { $type::PostMessage($hwnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero); }; Start-Sleep -Seconds 1; }"
 
-          :: 4. Launching MT5 with Live Trading Config (Exness-Trial8 Account)
+          :: 4. Launching MT5 with Live Trading Config (Exness-MT5Trial7 Account)
           echo [3/4] Launching MetaTrader 5 with Config (XAUUSDm)...
           start "" "%TERMINAL%" "/config:%CONFIG_FILE%"
           timeout /t 5 /nobreak >nul
