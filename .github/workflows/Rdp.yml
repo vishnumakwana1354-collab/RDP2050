@@ -1,4 +1,4 @@
-name: RDP + MT5 & MetaTester Setup Automation
+name: Forgejo RDP + MT5 x64 Expert Trading & MQL5 Cloud Earning
 
 on:
   workflow_dispatch:
@@ -28,7 +28,6 @@ jobs:
           $username = "Admin"
           $password = "Vishnu"
 
-          # Windows Server password complexity override
           secedit /export /cfg "$env:TEMP\secpol.inf"
           (Get-Content "$env:TEMP\secpol.inf") -replace "PasswordComplexity = 1", "PasswordComplexity = 0" | Set-Content "$env:TEMP\secpol.inf"
           secedit /configure /db "$env:TEMP\secpol.sdb" /cfg "$env:TEMP\secpol.inf" /areas SECURITYPOLICY
@@ -53,7 +52,6 @@ jobs:
           }
           '@
           [MouseSettings]::SwapMouseButton($false)
-          Write-Host "Mouse primary button successfully set to Left click."
 
       - name: Install Tailscale
         run: |
@@ -67,7 +65,7 @@ jobs:
         env:
           TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
         run: |
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=$env:TAILSCALE_AUTHKEY --hostname=gh-runner-$env:GITHUB_RUN_ID
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=$env:TAILSCALE_AUTHKEY --hostname=forge-runner-$env:GITHUB_RUN_ID
           $tsIP = $null
           $retries = 0
           while (-not $tsIP -and $retries -lt 10) {
@@ -81,50 +79,19 @@ jobs:
           }
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
-      - name: Install Setup 1 (Exness MT5) & Setup 2 (mt5tester.setup.exe) with Timeout Protection
+      - name: Install Exness MT5 from Repository
         run: |
-          # 1. Install Exness MT5 (Setup 1) with Timeout
-          $exnessInstaller = "$env:GITHUB_WORKSPACE\.github\workflows\exness5setup.exe"
-          if (Test-Path $exnessInstaller) {
+          $installerPath = "$env:GITHUB_WORKSPACE\.github\workflows\exness5setup.exe"
+          if (Test-Path $installerPath) {
               Write-Host "Installing Exness MT5 silently..."
-              $proc = Start-Process -FilePath $exnessInstaller -ArgumentList "/auto", "/silent" -PassThru
-              $sw = [System.Diagnostics.Stopwatch]::StartNew()
-              while (-not $proc.HasExited -and $sw.Elapsed.TotalSeconds -lt 40) {
-                  Start-Sleep -Seconds 1
-              }
-              if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
+              Start-Process -FilePath $installerPath -ArgumentList "/auto", "/silent" -Wait
           } else {
-              Write-Error "Setup file 'exness5setup.exe' not found in workflows folder!"
+              Write-Error "Setup file 'exness5setup.exe' not found!"
               exit 1
           }
 
-          # 2. Download and Install mt5tester.setup.exe (Setup 2) with Timeout
-          $testerInstaller = "$env:GITHUB_WORKSPACE\.github\workflows\mt5tester.setup.exe"
-          if (-not (Test-Path $testerInstaller)) {
-              Write-Host "Downloading mt5tester.setup.exe from repository URL..."
-              $testerUrl = "https://raw.githubusercontent.com/vishnumakwana1354-collab/RDP2050/main/.github/workflows/mt5tester.setup.exe"
-              try {
-                  Invoke-WebRequest -Uri $testerUrl -OutFile $testerInstaller
-              } catch {
-                  Write-Warning "Could not download mt5tester.setup.exe via URL."
-              }
-          }
-
-          if (Test-Path $testerInstaller) {
-              Write-Host "Installing MetaTrader Tester silently (Setup 2)..."
-              $proc = Start-Process -FilePath $testerInstaller -ArgumentList "/auto", "/silent" -PassThru
-              $sw = [System.Diagnostics.Stopwatch]::StartNew()
-              while (-not $proc.HasExited -and $sw.Elapsed.TotalSeconds -lt 40) {
-                  Start-Sleep -Seconds 1
-              }
-              if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
-          } else {
-              Write-Warning "mt5tester.setup.exe not found. Continuing..."
-          }
-
-      - name: Setup Config, Sync MQL5 Experts & Compile
+      - name: Sync MQL5 Experts, Setup Cloud Earning & Compile (x64 Regular)
         run: |
-          # 1. MT5 Live Trading INI Config (Exness-MT5Trial7 Account & MQL5 Community Login)
           $desktopPath = "C:\Users\Public\Desktop"
           if (-not (Test-Path $desktopPath)) {
               $desktopPath = [System.IO.Path]::Combine($env:USERPROFILE, "Desktop")
@@ -155,9 +122,9 @@ jobs:
 
           [System.IO.File]::WriteAllText($configPath, $iniContent, [System.Text.Encoding]::ASCII)
 
-          # 2. Locate Target Terminal Path & Sync MQL5 Experts & Extract Zips & Compile
           $mt5Path = "C:\Program Files\MetaTrader 5 - EXNESS"
           $metaEditorExe = "$mt5Path\metaeditor64.exe"
+          $metaTesterExe = "$mt5Path\metatester64.exe"
           
           $targetTerminalPath = "C:\Users\Admin\AppData\Roaming\MetaQuotes\Terminal\78D61077B4C86688517531BD9FD69587"
           $terminalFolders = @($targetTerminalPath)
@@ -188,37 +155,39 @@ jobs:
 
                   $zipFiles = Get-ChildItem -Path $expertsTarget -Filter "*.zip"
                   foreach ($zip in $zipFiles) {
+                      Write-Host "Extracting ZIP package: $($zip.Name)"
                       $extractFolder = Join-Path $expertsTarget $zip.BaseName
                       New-Item -ItemType Directory -Path $extractFolder -Force | Out-Null
                       Expand-Archive -Path $zip.FullName -DestinationPath $extractFolder -Force
                   }
               }
 
-              if (Test-Path $metaEditorExe) {
-                  $mq5Files = Get-ChildItem -Path $expertsTarget -Filter "*.mq5" -Recurse
-                  foreach ($mq5 in $mq5Files) {
-                      $proc = Start-Process -FilePath $metaEditorExe -ArgumentList "/compile:`"$($mq5.FullName)`"" -PassThru
-                      $sw = [System.Diagnostics.Stopwatch]::StartNew()
-                      while (-not $proc.HasExited -and $sw.Elapsed.TotalSeconds -lt 25) {
-                          Start-Sleep -Milliseconds 500
-                      }
-                      if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
+              # Compile all .mq5 files in x64 regular build mode
+              $mq5Files = Get-ChildItem -Path $expertsTarget -Filter "*.mq5" -Recurse
+              foreach ($mq5 in $mq5Files) {
+                  Write-Host "Compiling EA (x64 Regular): $($mq5.FullName)"
+                  $proc = Start-Process -FilePath $metaEditorExe -ArgumentList "/compile:`"$($mq5.FullName)`"","/platform:x64" -PassThru
+                  $timeoutSec = 25
+                  $sw = [System.Diagnostics.Stopwatch]::StartNew()
+                  while (-not $proc.HasExited -and $sw.Elapsed.TotalSeconds -lt $timeoutSec) {
+                      Start-Sleep -Milliseconds 500
                   }
+                  if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
               }
           }
 
-          # 3. Create run_all.bat for starting MT5, Background Wizard Closer, and MetaTester Agents
+          # Create run_all.bat for starting MT5, Cloud Agents, and Wizard Auto-Closer
           $batPath = Join-Path $desktopPath "run_all.bat"
           $batContent = @"
           @echo off
-          title Exness MT5 & MetaTester Agents Runner
+          title Exness MT5 (x64) + MQL5 Cloud Earning
           echo ========================================================
-          echo    Starting Exness MT5 & Strategy Agents Automation
+          echo    Starting MT5 x64 Trading & MQL5 Cloud Earning
           echo ========================================================
 
           set "MT5_PATH=C:\Program Files\MetaTrader 5 - EXNESS"
           set "TERMINAL=%MT5_PATH%\terminal64.exe"
-          set "METATESTER=%MT5_PATH%\metatester64.exe"
+          set "TESTER=%MT5_PATH%\metatester64.exe"
           set "CONFIG_FILE=%~dp0mt5_live_config.ini"
 
           taskkill /F /IM terminal64.exe 2>nul
@@ -232,19 +201,19 @@ jobs:
           timeout /t 2 /nobreak >nul
 
           echo [2/4] Starting Background Wizard Auto-Closer...
-          start /min powershell -Command "$sig = '[DllImport(\"user32.dll\")] public static extern IntPtr FindWindow(string l, string w); [DllImport(\"user32.dll\")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);'; $type = Add-Type -MemberDefinition $sig -Name 'Win32W' -Namespace 'Bot' -PassThru; while($true) { $hwnd = $type::FindWindow($null, 'Open an Account'); if($hwnd -ne [IntPtr]::Zero) { $type::PostMessage($hwnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero); }; Start-Sleep -Seconds 1; }"
+          start /min powershell -Command "`$sig = '[DllImport(\"user32.dll\")] public static extern IntPtr FindWindow(string l, string w); [DllImport(\"user32.dll\")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);'; `$type = Add-Type -MemberDefinition `$sig -Name 'Win32W' -Namespace 'Bot' -PassThru; while(`$true) { `$hwnd = `$type::FindWindow(`$null, 'Open an Account'); if(`$hwnd -ne [IntPtr]::Zero) { `$type::PostMessage(`$hwnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero); }; Start-Sleep -Seconds 1; }"
 
-          echo [3/4] Launching MetaTrader 5 with Config (XAUUSDm)...
+          echo [3/4] Launching MetaTrader 5 x64 Live Trading...
           start "" "%TERMINAL%" "/config:%CONFIG_FILE%"
           timeout /t 5 /nobreak >nul
 
-          echo [4/4] Launching MetaTester 5 Agents...
-          if exist "%METATESTER%" (
-              start "" "%METATESTER%"
+          echo [4/4] Launching MQL5 Cloud Network Agents for Earning...
+          if exist "%TESTER%" (
+              start /min "" "%TESTER%" /login:rinkugohil30897 /server:MQL5Cloud /pools:1 /agents:4
           )
 
           echo ========================================================
-          echo    Success! MT5 and Strategy Agents are running live.
+          echo    Success! x64 Trading & Cloud Earning are active.
           echo ========================================================
           "@
 
@@ -264,6 +233,6 @@ jobs:
           Write-Host ""
 
           while ($true) {
-              Write-Host "[(Get-Date)] RDP Active - Server, MT5 & Strategy Agents running..."
+              Write-Host "[(Get-Date)] RDP Active - MT5 x64 EA & Cloud Earning Running..."
               Start-Sleep -Seconds 300
           }
