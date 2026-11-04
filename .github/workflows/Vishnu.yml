@@ -1,4 +1,4 @@
-name: RDP + MT5 & Python XAUUSDm Auto-Trading Automation
+name: RDP + MT5 & Strategy Agents Automation
 
 on:
   workflow_dispatch:
@@ -13,11 +13,6 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-
-      - name: Set up Python 3.11.9
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11.9'
 
       - name: Configure Core RDP Settings
         run: |
@@ -86,11 +81,6 @@ jobs:
           }
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
-      - name: Setup Python Environment & Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install MetaTrader5 pandas numpy requests scikit-learn joblib
-
       - name: Install Exness MT5 from Repository
         run: |
           $installerPath = "$env:GITHUB_WORKSPACE\.github\workflows\exness5setup.exe"
@@ -102,26 +92,9 @@ jobs:
               exit 1
           }
 
-      - name: Setup Bot Script & Sync MQL5 Experts Code & Extract Zips
+      - name: Sync MQL5 Experts Code, Extract Zips & Compile
         run: |
-          # 1. Setup Bot Folder and Copy Python Script with Path Patching
-          $botTargetDir = "C:\XAUBOT_FF"
-          New-Item -ItemType Directory -Path $botTargetDir -Force | Out-Null
-
-          $botSource = Join-Path $env:GITHUB_WORKSPACE ".github\workflows\JGVFXMARKETXAUUSD.py"
-          $botTarget = Join-Path $botTargetDir "JGVFXMARKETXAUUSD.py"
-
-          if (Test-Path $botSource) {
-              $botContent = Get-Content -Path $botSource -Raw
-              $botContent = $botContent -replace 'BASE_DIR\s*=\s*r".*?"', 'BASE_DIR = r"C:\XAUBOT_FF"'
-              [System.IO.File]::WriteAllText($botTarget, $botContent, [System.Text.Encoding]::UTF8)
-              Write-Host "Python bot successfully configured at: $botTarget"
-          } else {
-              Write-Error "JGVFXMARKETXAUUSD.py not found in .github/workflows/"
-              exit 1
-          }
-
-          # 2. MT5 Live Trading INI Config (Exness-MT5Trial7 Account)
+          # 1. MT5 Live Trading INI Config (Exness-MT5Trial7 Account & MQL5 Community Login)
           $desktopPath = "C:\Users\Public\Desktop"
           if (-not (Test-Path $desktopPath)) {
               $desktopPath = [System.IO.Path]::Combine($env:USERPROFILE, "Desktop")
@@ -152,11 +125,11 @@ jobs:
 
           [System.IO.File]::WriteAllText($configPath, $iniContent, [System.Text.Encoding]::ASCII)
 
-          # 3. Locate Target Terminal Path & Sync MQL5 Experts & Extract Zips & Compile (x64 Regular)
+          # 2. Locate Target Terminal Path & Sync MQL5 Experts & Extract Zips & Compile (x64 Regular)
           $mt5Path = "C:\Program Files\MetaTrader 5 - EXNESS"
           $metaEditorExe = "$mt5Path\metaeditor64.exe"
           
-          # Exact target terminal path specified by user
+          # Exact target terminal path specified
           $targetTerminalPath = "C:\Users\Admin\AppData\Roaming\MetaQuotes\Terminal\78D61077B4C86688517531BD9FD69587"
           $terminalFolders = @($targetTerminalPath)
 
@@ -233,21 +206,23 @@ jobs:
               }
           }
 
-          # 4. Create run_all.bat for starting MT5, Background Wizard Closer, and Python Bot
+          # 3. Create run_all.bat for starting MT5, Background Wizard Closer, and Strategy Agents (MetaTester)
           $batPath = Join-Path $desktopPath "run_all.bat"
           $batContent = @"
           @echo off
-          title Exness MT5 & Python XAUUSDm Bot Runner
+          title Exness MT5 & Strategy Agents Runner
           echo ========================================================
-          echo    Starting Exness MT5 & Python XAUUSDm Automation
+          echo    Starting Exness MT5 & MetaTester Agents Automation
           echo ========================================================
 
           set "MT5_PATH=C:\Program Files\MetaTrader 5 - EXNESS"
           set "TERMINAL=%MT5_PATH%\terminal64.exe"
+          set "METATESTER=%MT5_PATH%\metatester64.exe"
           set "CONFIG_FILE=%~dp0mt5_live_config.ini"
 
           :: 1. Stop existing instances
           taskkill /F /IM terminal64.exe 2>nul
+          taskkill /F /IM metatester64.exe 2>nul
           timeout /t 2 /nobreak >nul
 
           :: 2. Launch MT5 Profile Initialization
@@ -266,19 +241,23 @@ jobs:
           start "" "%TERMINAL%" "/config:%CONFIG_FILE%"
           timeout /t 5 /nobreak >nul
 
-          :: 5. Launching Python Trading Bot Script
-          echo [4/4] Launching Python Bot Script (JGVFXMARKETXAUUSD.py)...
-          start "Python XAUUSDm Bot" cmd /k "python "C:\XAUBOT_FF\JGVFXMARKETXAUUSD.py""
+          :: 5. Launching MetaTester 5 Agents Manager for Strategy Testing
+          echo [4/4] Launching MetaTester 5 Agents...
+          if exist "%METATESTER%" (
+              start "" "%METATESTER%"
+          ) else (
+              echo MetaTester not found at %METATESTER%
+          )
 
           echo ========================================================
-          echo    Success! MT5 and Python Bot are running live.
+          echo    Success! MT5 and Strategy Agents are running live.
           echo ========================================================
           "@
 
           [System.IO.File]::WriteAllText($batPath, $batContent, [System.Text.Encoding]::ASCII)
           Write-Host "run_all.bat successfully created at Desktop: $batPath"
 
-          # 5. Execute Desktop run_all.bat
+          # 4. Execute Desktop run_all.bat
           Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$batPath`""
 
       - name: Maintain Connection & Monitor RDP
@@ -294,6 +273,6 @@ jobs:
           Write-Host ""
 
           while ($true) {
-              Write-Host "[(Get-Date)] RDP Active - Server & MT5 Bot running..."
+              Write-Host "[(Get-Date)] RDP Active - Server, MT5 & Strategy Agents running..."
               Start-Sleep -Seconds 300
           }
