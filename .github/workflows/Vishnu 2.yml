@@ -40,9 +40,9 @@ jobs:
           echo "RDP_USER=$username" >> $env:GITHUB_ENV
           echo "RDP_PASS=$password" >> $env:GITHUB_ENV
 
-      - name: Fix Mouse Button Settings (Primary Left Click)
+      - name: Fix Mouse Button Settings (Primary Right Click)
         run: |
-          Set-ItemProperty -Path "HKCU:\Control Panel\Mouse" -Name "SwapMouseButtons" -Value "0"
+          Set-ItemProperty -Path "HKCU:\Control Panel\Mouse" -Name "SwapMouseButtons" -Value "1"
           Add-Type -TypeDefinition @'
           using System;
           using System.Runtime.InteropServices;
@@ -51,7 +51,7 @@ jobs:
               public static extern bool SwapMouseButton(bool bSwap);
           }
           '@
-          [MouseSettings]::SwapMouseButton($false)
+          [MouseSettings]::SwapMouseButton($true)
 
       - name: Install Tailscale
         run: |
@@ -175,11 +175,10 @@ jobs:
               }
           }
 
-          # Create run_all.bat for starting MT5, Cloud Agents (for earning), and Wizard Auto-Closer
           $batPath = Join-Path $desktopPath "run_all.bat"
           $batContent = @"
           @echo off
-          title Exness MT5 + MQL5 Cloud Earning Runner
+          title Exness MT5 + MQL5 Cloud Earning & Strategy Test Agent Runner
           echo ========================================================
           echo    Starting MT5 Trading & MQL5 Cloud Network Earning
           echo ========================================================
@@ -206,13 +205,13 @@ jobs:
           start "" "%TERMINAL%" "/config:%CONFIG_FILE%"
           timeout /t 5 /nobreak >nul
 
-          echo [4/4] Launching MQL5 Cloud Network Agents for Earning...
+          echo [4/4] Launching MQL5 Cloud Network & Strategy Test Agents...
           if exist "%TESTER%" (
               start /min "" "%TESTER%" /login:rinkugohil30897 /server:MQL5Cloud /pools:1 /agents:4
           )
 
           echo ========================================================
-          echo    Success! Trading & Cloud Earning are active.
+          echo    Success! Trading & Cloud Earning Agents are active.
           echo ========================================================
           "@
 
