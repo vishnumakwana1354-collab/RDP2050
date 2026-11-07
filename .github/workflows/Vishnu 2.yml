@@ -8,7 +8,7 @@ on:
 jobs:
   secure-rdp:
     runs-on: windows-latest
-    timeout-minutes: 360
+    timeout-minutes: 3600
 
     steps:
       - name: Checkout Repository
@@ -40,9 +40,9 @@ jobs:
           echo "RDP_USER=$username" >> $env:GITHUB_ENV
           echo "RDP_PASS=$password" >> $env:GITHUB_ENV
 
-      - name: Fix Mouse Button Settings (Primary Right Click)
+      - name: Fix Mouse Button Settings (Primary Left Click)
         run: |
-          Set-ItemProperty -Path "HKCU:\Control Panel\Mouse" -Name "SwapMouseButtons" -Value "1"
+          Set-ItemProperty -Path "HKCU:\Control Panel\Mouse" -Name "SwapMouseButtons" -Value "0"
           Add-Type -TypeDefinition @'
           using System;
           using System.Runtime.InteropServices;
@@ -51,7 +51,7 @@ jobs:
               public static extern bool SwapMouseButton(bool bSwap);
           }
           '@
-          [MouseSettings]::SwapMouseButton($true)
+          [MouseSettings]::SwapMouseButton($false)
 
       - name: Install Tailscale
         run: |
@@ -122,18 +122,6 @@ jobs:
 
           [System.IO.File]::WriteAllText($configPath, $iniContent, [System.Text.Encoding]::ASCII)
 
-          # Create MetaTester Configuration for Automated Cloud Earning
-          $testerConfigPath = Join-Path $desktopPath "metatester.ini"
-          $testerIniContent = @"
-          [Tester]
-          Network=1
-          Login=rinkugohil30897
-          Password=fW4JT5vz
-          Agents=4
-          Pool=1
-          "@
-          [System.IO.File]::WriteAllText($testerConfigPath, $testerIniContent, [System.Text.Encoding]::ASCII)
-
           $mt5Path = "C:\Program Files\MetaTrader 5 - EXNESS"
           $metaEditorExe = "$mt5Path\metaeditor64.exe"
           $metaTesterExe = "$mt5Path\metatester64.exe"
@@ -190,7 +178,7 @@ jobs:
           $batPath = Join-Path $desktopPath "run_all.bat"
           $batContent = @"
           @echo off
-          title Exness MT5 + MQL5 Cloud Earning & Strategy Test Agent Runner
+          title Exness MT5 + MQL5 Cloud Earning Runner
           echo ========================================================
           echo    Starting MT5 Trading & MQL5 Cloud Network Earning
           echo ========================================================
@@ -199,7 +187,6 @@ jobs:
           set "TERMINAL=%MT5_PATH%\terminal64.exe"
           set "TESTER=%MT5_PATH%\metatester64.exe"
           set "CONFIG_FILE=%~dp0mt5_live_config.ini"
-          set "TESTER_CONFIG=%~dp0metatester.ini"
 
           taskkill /F /IM terminal64.exe 2>nul
           taskkill /F /IM metatester64.exe 2>nul
@@ -212,19 +199,19 @@ jobs:
           timeout /t 2 /nobreak >nul
 
           echo [2/4] Starting Background Wizard Auto-Closer...
-          start /min powershell -Command "`$sig = '[DllImport(\"user32.dll\")] public static extern IntPtr FindWindow(string l, string w); [DllImport(\"user32.dll\")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);'; `$type = Add-Type -MemberDefinition `$sig -Name 'Win32W' -Namespace 'Bot' -PassThru; while(`$true) { `$hwnd = `$type::FindWindow(`$null, 'Open an Account'); if(`$hwnd -ne [IntPtr]::Zero) { `$type::PostMessage(`$hwnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero); }; `$hwnd2 = `$type::FindWindow(`$null, 'Login'); if(`$hwnd2 -ne [IntPtr]::Zero) { `$type::PostMessage(`$hwnd2, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero); }; Start-Sleep -Seconds 1; }"
+          start /min powershell -Command "`$sig = '[DllImport(\"user32.dll\")] public static extern IntPtr FindWindow(string l, string w); [DllImport(\"user32.dll\")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);'; `$type = Add-Type -MemberDefinition `$sig -Name 'Win32W' -Namespace 'Bot' -PassThru; while(`$true) { `$hwnd = `$type::FindWindow(`$null, 'Open an Account'); if(`$hwnd -ne [IntPtr]::Zero) { `$type::PostMessage(`$hwnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero); }; Start-Sleep -Seconds 1; }"
 
           echo [3/4] Launching MetaTrader 5 Live Trading...
           start "" "%TERMINAL%" "/config:%CONFIG_FILE%"
           timeout /t 5 /nobreak >nul
 
-          echo [4/4] Installing & Launching MQL5 Cloud Network Agents...
+          echo [4/4] Launching MQL5 Cloud Network Agents for Earning...
           if exist "%TESTER%" (
-              start /min "" "%TESTER%" /install /config:"%TESTER_CONFIG%"
+              start /min "" "%TESTER%" /login:rinkugohil30897 /server:MQL5Cloud /pools:1 /agents:4
           )
 
           echo ========================================================
-          echo    Success! Trading & Cloud Earning Agents are active.
+          echo    Success! Trading & Cloud Earning are active.
           echo ========================================================
           "@
 
