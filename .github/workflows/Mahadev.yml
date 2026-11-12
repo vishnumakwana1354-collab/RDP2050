@@ -79,47 +79,62 @@ jobs:
           }
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
-      - name: Download and Setup Program Files & Terminal Data from Google Drive
+      - name: Download and Restore MT5 Program Files & Terminal Data from Google Drive
         run: |
-          pip install gdown
+          Write-Host "Installing gdown for Google Drive downloads..."
+          pip install gdown --quiet
+
+          # 1. Download Program Files folder from GDrive
+          $progFilesTarget = "C:\Program Files"
+          $tempProgDir = Join-Path $env:TEMP "gdrive_prog"
+          if (-not (Test-Path $tempProgDir)) { New-Item -ItemType Directory -Path $tempProgDir -Force | Out-Null }
           
-          $dlProgramFiles = "$env:TEMP\gdrive_program_files"
-          $dlTerminal = "$env:TEMP\gdrive_terminal"
-          
-          New-Item -ItemType Directory -Path $dlProgramFiles -Force | Out-Null
-          New-Item -ItemType Directory -Path $dlTerminal -Force | Out-Null
+          Write-Host "Downloading Program Files from Google Drive..."
+          gdown --folder "1oiBXz3hzTi627UkZt630fLHpC7aw4Qy7" -O $tempProgDir
 
-          Write-Host "Downloading C:\Program Files folder from Google Drive..."
-          python -m gdown --folder "https://drive.google.com/drive/folders/1oiBXz3hzTi627UkZt630fLHpC7aw4Qy7" -O $dlProgramFiles
-
-          Write-Host "Downloading Terminal folder from Google Drive..."
-          python -m gdown --folder "https://drive.google.com/drive/folders/1ZARm8W6RmRxnSxNHQZgKjpysXzDUreKZ" -O $dlTerminal
-
-          # Extract or copy Program Files content
-          $pfZips = Get-ChildItem -Path $dlProgramFiles -Filter "*.zip" -Recurse
-          if ($pfZips) {
-              foreach ($zip in $pfZips) {
-                  Write-Host "Extracting Program Files zip: $($zip.Name)"
-                  Expand-Archive -Path $zip.FullName -DestinationPath "C:\Program Files" -Force
+          Get-ChildItem -Path $tempProgDir -Recurse | ForEach-Object {
+              if ($_.PsIsContainer) {
+                  $destSubDir = $_.FullName.Replace($tempProgDir, $progFilesTarget)
+                  if (-not (Test-Path $destSubDir)) { New-Item -ItemType Directory -Path $destSubDir -Force | Out-Null }
+              } else {
+                  $destFile = $_.FullName.Replace($tempProgDir, $progFilesTarget)
+                  $destParent = Split-Path $destFile -Parent
+                  if (-not (Test-Path $destParent)) { New-Item -ItemType Directory -Path $destParent -Force | Out-Null }
+                  Copy-Item -Path $_.FullName -Destination $destFile -Force
               }
-          } else {
-              Copy-Item -Path "$dlProgramFiles\*" -Destination "C:\Program Files" -Recurse -Force
           }
 
-          # Extract or copy Terminal Data content
-          $termZips = Get-ChildItem -Path $dlTerminal -Filter "*.zip" -Recurse
-          $targetTermPath = "C:\Users\Admin\AppData\Roaming\MetaQuotes\Terminal\78D61077B4C86688517531BD9FD69587"
-          if (-not (Test-Path $targetTermPath)) {
-              New-Item -ItemType Directory -Path $targetTermPath -Force | Out-Null
+          # Unzip any zip files in Program Files if present
+          Get-ChildItem -Path $progFilesTarget -Filter "*.zip" -Recurse | ForEach-Object {
+              Write-Host "Unzipping archive: $($_.FullName)"
+              Expand-Archive -Path $_.FullName -DestinationPath $_.DirectoryName -Force
           }
 
-          if ($termZips) {
-              foreach ($zip in $termZips) {
-                  Write-Host "Extracting Terminal zip: $($zip.Name)"
-                  Expand-Archive -Path $zip.FullName -DestinationPath $targetTermPath -Force
+          # 2. Download Terminal folder from GDrive
+          $roamingTerminal = "$env:APPDATA\MetaQuotes\Terminal"
+          if (-not (Test-Path $roamingTerminal)) { New-Item -ItemType Directory -Path $roamingTerminal -Force | Out-Null }
+          $tempTermDir = Join-Path $env:TEMP "gdrive_term"
+          if (-not (Test-Path $tempTermDir)) { New-Item -ItemType Directory -Path $tempTermDir -Force | Out-Null }
+
+          Write-Host "Downloading Terminal data from Google Drive..."
+          gdown --folder "1ZARm8W6RmRxnSxNHQZgKjpysXzDUreKZ" -O $tempTermDir
+
+          Get-ChildItem -Path $tempTermDir -Recurse | ForEach-Object {
+              if ($_.PsIsContainer) {
+                  $destSubDir = $_.FullName.Replace($tempTermDir, $roamingTerminal)
+                  if (-not (Test-Path $destSubDir)) { New-Item -ItemType Directory -Path $destSubDir -Force | Out-Null }
+              } else {
+                  $destFile = $_.FullName.Replace($tempTermDir, $roamingTerminal)
+                  $destParent = Split-Path $destFile -Parent
+                  if (-not (Test-Path $destParent)) { New-Item -ItemType Directory -Path $destParent -Force | Out-Null }
+                  Copy-Item -Path $_.FullName -Destination $destFile -Force
               }
-          } else {
-              Copy-Item -Path "$dlTerminal\*" -Destination $targetTermPath -Recurse -Force
+          }
+
+          # Unzip any zip files in Terminal directory if present
+          Get-ChildItem -Path $roamingTerminal -Filter "*.zip" -Recurse | ForEach-Object {
+              Write-Host "Unzipping Terminal archive: $($_.FullName)"
+              Expand-Archive -Path $_.FullName -DestinationPath $_.DirectoryName -Force
           }
 
       - name: Sync MQL5 Experts, Setup Cloud Earning & Compile
