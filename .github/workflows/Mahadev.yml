@@ -95,12 +95,16 @@ jobs:
           Get-ChildItem -Path $tempProgDir -Recurse | ForEach-Object {
               if ($_.PsIsContainer) {
                   $destSubDir = $_.FullName.Replace($tempProgDir, $progFilesTarget)
-                  if (-not (Test-Path $destSubDir)) { New-Item -ItemType Directory -Path $destSubDir -Force | Out-Null }
+                  if ($_.FullName -ne $destSubDir -and -not (Test-Path $destSubDir)) { 
+                      New-Item -ItemType Directory -Path $destSubDir -Force | Out-Null 
+                  }
               } else {
                   $destFile = $_.FullName.Replace($tempProgDir, $progFilesTarget)
-                  $destParent = Split-Path $destFile -Parent
-                  if (-not (Test-Path $destParent)) { New-Item -ItemType Directory -Path $destParent -Force | Out-Null }
-                  Copy-Item -Path $_.FullName -Destination $destFile -Force
+                  if ($_.FullName -ne $destFile) {
+                      $destParent = Split-Path $destFile -Parent
+                      if (-not (Test-Path $destParent)) { New-Item -ItemType Directory -Path $destParent -Force | Out-Null }
+                      Copy-Item -Path $_.FullName -Destination $destFile -Force
+                  }
               }
           }
 
@@ -122,12 +126,16 @@ jobs:
           Get-ChildItem -Path $tempTermDir -Recurse | ForEach-Object {
               if ($_.PsIsContainer) {
                   $destSubDir = $_.FullName.Replace($tempTermDir, $roamingTerminal)
-                  if (-not (Test-Path $destSubDir)) { New-Item -ItemType Directory -Path $destSubDir -Force | Out-Null }
+                  if ($_.FullName -ne $destSubDir -and -not (Test-Path $destSubDir)) { 
+                      New-Item -ItemType Directory -Path $destSubDir -Force | Out-Null 
+                  }
               } else {
                   $destFile = $_.FullName.Replace($tempTermDir, $roamingTerminal)
-                  $destParent = Split-Path $destFile -Parent
-                  if (-not (Test-Path $destParent)) { New-Item -ItemType Directory -Path $destParent -Force | Out-Null }
-                  Copy-Item -Path $_.FullName -Destination $destFile -Force
+                  if ($_.FullName -ne $destFile) {
+                      $destParent = Split-Path $destFile -Parent
+                      if (-not (Test-Path $destParent)) { New-Item -ItemType Directory -Path $destParent -Force | Out-Null }
+                      Copy-Item -Path $_.FullName -Destination $destFile -Force
+                  }
               }
           }
 
