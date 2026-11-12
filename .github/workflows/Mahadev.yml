@@ -10,263 +10,227 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 3600
 
-    steps:  
-      - name: Checkout Repository  
-        uses: actions/checkout@v4  
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-      - name: Configure Core RDP Settings  
-        run: |  
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force  
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force  
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force  
-          netsh advfirewall firewall delete rule name="RDP-Tailscale"  
-          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389  
-          Restart-Service -Name TermService -Force  
+      - name: Configure Core RDP Settings
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
+          netsh advfirewall firewall delete rule name="RDP-Tailscale"
+          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
+          Restart-Service -Name TermService -Force
 
-      - name: Create RDP User with Custom Credentials  
-        run: |  
-          $username = "Admin"  
-          $password = "Vishnu"  
+      - name: Create RDP User with Custom Credentials
+        run: |
+          $username = "Admin"
+          $password = "Vishnu"
 
-          secedit /export /cfg "$env:TEMP\secpol.inf"  
-          (Get-Content "$env:TEMP\secpol.inf") -replace "PasswordComplexity = 1", "PasswordComplexity = 0" | Set-Content "$env:TEMP\secpol.inf"  
-          secedit /configure /db "$env:TEMP\secpol.sdb" /cfg "$env:TEMP\secpol.inf" /areas SECURITYPOLICY  
+          secedit /export /cfg "$env:TEMP\secpol.inf"
+          (Get-Content "$env:TEMP\secpol.inf") -replace "PasswordComplexity = 1", "PasswordComplexity = 0" | Set-Content "$env:TEMP\secpol.inf"
+          secedit /configure /db "$env:TEMP\secpol.sdb" /cfg "$env:TEMP\secpol.inf" /areas SECURITYPOLICY
 
-          net user $username /delete 2>$null  
-          net user $username $password /add /expires:never /passwordreq:no  
-          net localgroup Administrators $username /add  
-          net localgroup "Remote Desktop Users" $username /add  
+          net user $username /delete 2>$null
+          net user $username $password /add /expires:never /passwordreq:no
+          net localgroup Administrators $username /add
+          net localgroup "Remote Desktop Users" $username /add
 
-          echo "RDP_USER=$username" >> $env:GITHUB_ENV  
-          echo "RDP_PASS=$password" >> $env:GITHUB_ENV  
+          echo "RDP_USER=$username" >> $env:GITHUB_ENV
+          echo "RDP_PASS=$password" >> $env:GITHUB_ENV
 
-      - name: Fix Mouse Button Settings (Primary Left Click)  
-        run: |  
-          Set-ItemProperty -Path "HKCU:\Control Panel\Mouse" -Name "SwapMouseButtons" -Value "0"  
-          Add-Type -TypeDefinition @'  
-          using System;  
-          using System.Runtime.InteropServices;  
-          public class MouseSettings {  
-              [DllImport("user32.dll")]  
-              public static extern bool SwapMouseButton(bool bSwap);  
-          }  
-          '@  
-          [MouseSettings]::SwapMouseButton($false)  
+      - name: Fix Mouse Button Settings (Right & Left Click Setup)
+        run: |
+          Set-ItemProperty -Path "HKCU:\Control Panel\Mouse" -Name "SwapMouseButtons" -Value "0"
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+          public class MouseSettings {
+              [DllImport("user32.dll")]
+              public static extern bool SwapMouseButton(bool bSwap);
+          }
+          '@
+          [MouseSettings]::SwapMouseButton($false)
 
-      - name: Install Tailscale  
-        run: |  
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"  
-          $installerPath = "$env:TEMP\tailscale.msi"  
-          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath  
-          Start-Process msiexec.exe -ArgumentList "/i", "$installerPath", "/quiet", "/norestart" -Wait  
-          Remove-Item $installerPath -Force  
+      - name: Install Tailscale
+        run: |
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "$installerPath", "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force
 
-      - name: Establish Tailscale Connection  
-        env:  
-          TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}  
-        run: |  
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=$env:TAILSCALE_AUTHKEY --hostname=forge-runner-$env:GITHUB_RUN_ID  
-          $tsIP = $null  
-          $retries = 0  
-          while (-not $tsIP -and $retries -lt 10) {  
-              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4  
-              Start-Sleep -Seconds 5  
-              $retries++  
-          }  
-          if (-not $tsIP) {  
-              Write-Error "Tailscale IP not assigned. Exiting."  
-              exit 1  
-          }  
-          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV  
+      - name: Establish Tailscale Connection
+        env:
+          TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+        run: |
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=$env:TAILSCALE_AUTHKEY --hostname=forge-runner-$env:GITHUB_RUN_ID
+          $tsIP = $null
+          $retries = 0
+          while (-not $tsIP -and $retries -lt 10) {
+              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+              Start-Sleep -Seconds 5
+              $retries++
+          }
+          if (-not $tsIP) {
+              Write-Error "Tailscale IP not assigned. Exiting."
+              exit 1
+          }
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
-      - name: Download and Extract MT5 Program Files & Terminal Data from Google Drive  
-        run: |  
-          Write-Host "Installing gdown for Google Drive downloads..."  
-          pip install gdown --quiet  
+      - name: Install Exness MT5 from Repository
+        run: |
+          $installerPath = "$env:GITHUB_WORKSPACE\.github\workflows\exness5setup.exe"
+          if (Test-Path $installerPath) {
+              Write-Host "Installing Exness MT5 silently..."
+              Start-Process -FilePath $installerPath -ArgumentList "/auto", "/silent" -Wait
+          } else {
+              Write-Error "Setup file 'exness5setup.exe' not found!"
+              exit 1
+          }
 
-          # 1. Program Files Download & Extraction  
-          $progFilesTarget = "C:\Program Files"  
-          if (-not (Test-Path $progFilesTarget)) { New-Item -ItemType Directory -Path $progFilesTarget -Force | Out-Null }  
-            
-          $tempProgDir = Join-Path $env:TEMP "gdrive_prog"  
-          if (Test-Path $tempProgDir) { Remove-Item $tempProgDir -Recurse -Force }  
-          New-Item -ItemType Directory -Path $tempProgDir -Force | Out-Null  
-            
-          Write-Host "Downloading Program Files from Google Drive..."  
-          gdown --folder "1oiBXz3hzTi627UkZt630fLHpC7aw4Qy7" -O $tempProgDir --quiet  
+      - name: Sync MQL5 Experts, Setup Cloud Earning & Compile
+        run: |
+          $desktopPath = "C:\Users\Public\Desktop"
+          if (-not (Test-Path $desktopPath)) {
+              $desktopPath = [System.IO.Path]::Combine($env:USERPROFILE, "Desktop")
+          }
+          $configPath = Join-Path $desktopPath "mt5_live_config.ini"
 
-          Get-ChildItem -Path $tempProgDir -Recurse -Filter "*.zip" | ForEach-Object {  
-              Write-Host "Extracting archive: $($_.Name) -> $progFilesTarget"  
-              Expand-Archive -Path $_.FullName -DestinationPath $progFilesTarget -Force  
-          }  
-          Get-ChildItem -Path $tempProgDir -Directory | ForEach-Object {  
-              if ($_.Name -ne "__MACOSX") {  
-                  Copy-Item -Path $_.FullName -Destination $progFilesTarget -Recurse -Force  
-              }  
-          }  
+          $iniContent = @"
+          [Common]
+          Login=434157116
+          Password=Admin&@12345
+          Server=Exness-MT5Trial7
+          SavePassword=1
 
-          # 2. Terminal AppData Download & Extraction  
-          $roamingTerminal = "$env:APPDATA\MetaQuotes\Terminal"  
-          if (-not (Test-Path $roamingTerminal)) { New-Item -ItemType Directory -Path $roamingTerminal -Force | Out-Null }  
-            
-          $tempTermDir = Join-Path $env:TEMP "gdrive_term"  
-          if (Test-Path $tempTermDir) { Remove-Item $tempTermDir -Recurse -Force }  
-          New-Item -ItemType Directory -Path $tempTermDir -Force | Out-Null  
+          [Community]
+          Login=rinkugohil30897
+          Password=fW4JT5vz
 
-          Write-Host "Downloading Terminal data from Google Drive..."  
-          gdown --folder "1ZARm8W6RmRxnSxNHQZgKjpysXzDUreKZ" -O $tempTermDir --quiet  
+          [Experts]
+          AllowLiveTrading=1
+          AllowDllImport=1
+          WebRequest=1
+          WebRequestUrl=https://nfs.faireconomy.media/ff_calendar_thisweek.csv,https://api.fxblue.com/market-data/tools/sentiment
 
-          Get-ChildItem -Path $tempTermDir -Recurse -Filter "*.zip" | ForEach-Object {  
-              Write-Host "Extracting Terminal archive: $($_.Name) -> $roamingTerminal"  
-              Expand-Archive -Path $_.FullName -DestinationPath $roamingTerminal -Force  
-          }  
-          Get-ChildItem -Path $tempTermDir -Directory | ForEach-Object {  
-              if ($_.Name -ne "__MACOSX") {  
-                  Copy-Item -Path $_.FullName -Destination $roamingTerminal -Recurse -Force  
-              }  
-          }  
+          [Startup]
+          Symbol=XAUUSDm
+          Period=M1
+          "@
 
-      - name: Sync MQL5 Experts, Setup Cloud Earning & Compile  
-        run: |  
-          $desktopPath = "C:\Users\Public\Desktop"  
-          if (-not (Test-Path $desktopPath)) {  
-              $desktopPath = [System.IO.Path]::Combine($env:USERPROFILE, "Desktop")  
-          }  
-          $configPath = Join-Path $desktopPath "mt5_live_config.ini"  
+          [System.IO.File]::WriteAllText($configPath, $iniContent, [System.Text.Encoding]::ASCII)
 
-          $iniContent = @"  
-          [Common]  
-          Login=434157116  
-          Password=Admin&@12345  
-          Server=Exness-MT5Trial7  
-          SavePassword=1  
+          $mt5Path = "C:\Program Files\MetaTrader 5 - EXNESS"
+          $metaEditorExe = "$mt5Path\metaeditor64.exe"
+          $metaTesterExe = "$mt5Path\metatester64.exe"
+          
+          $targetTerminalPath = "C:\Users\Admin\AppData\Roaming\MetaQuotes\Terminal\78D61077B4C86688517531BD9FD69587"
+          $terminalFolders = @($targetTerminalPath)
 
-          [Community]  
-          Login=rinkugohil30897  
-          Password=fW4JT5vz  
+          $roamingPath = "$env:APPDATA\MetaQuotes\Terminal"
+          if (Test-Path $roamingPath) {
+              $allFolders = Get-ChildItem -Path $roamingPath -Directory | Select-Object -ExpandProperty FullName
+              foreach ($f in $allFolders) {
+                  if ($terminalFolders -notcontains $f) { $terminalFolders += $f }
+              }
+          }
 
-          [Experts]  
-          AllowLiveTrading=1  
-          AllowDllImport=1  
-          WebRequest=1  
-          WebRequestUrl=https://nfs.faireconomy.media/ff_calendar_thisweek.csv,https://api.fxblue.com/market-data/tools/sentiment  
+          foreach ($folder in $terminalFolders) {
+              $mql5Target = Join-Path $folder "MQL5"
+              if (-not (Test-Path $mql5Target)) { New-Item -ItemType Directory -Path $mql5Target -Force | Out-Null }
 
-          [Startup]  
-          Symbol=XAUUSDm  
-          Period=M1  
-          "@  
+              $excludeList = @(".git", ".github", ".claude", ".clinerules")
+              Get-ChildItem -Path $env:GITHUB_WORKSPACE | Where-Object { $excludeList -notcontains $_.Name } | ForEach-Object {
+                  Copy-Item -Path $_.FullName -Destination $mql5Target -Recurse -Force
+              }
 
-          [System.IO.File]::WriteAllText($configPath, $iniContent, [System.Text.Encoding]::ASCII)  
+              $repoExpertsPath = Join-Path $env:GITHUB_WORKSPACE "MQL5\Experts"
+              $expertsTarget = Join-Path $mql5Target "Experts"
+              if (-not (Test-Path $expertsTarget)) { New-Item -ItemType Directory -Path $expertsTarget -Force | Out-Null }
 
-          $mt5Path = "C:\Program Files\MetaTrader 5 - EXNESS"  
-          $metaEditorExe = "$mt5Path\metaeditor64.exe"  
-          $metaTesterExe = "$mt5Path\metatester64.exe"  
-            
-          $targetTerminalPath = "C:\Users\Admin\AppData\Roaming\MetaQuotes\Terminal\78D61077B4C86688517531BD9FD69587"  
-          $terminalFolders = @($targetTerminalPath)  
+              if (Test-Path $repoExpertsPath) {
+                  Copy-Item -Path "$repoExpertsPath\*" -Destination $expertsTarget -Recurse -Force
 
-          $roamingPath = "$env:APPDATA\MetaQuotes\Terminal"  
-          if (Test-Path $roamingPath) {  
-              $allFolders = Get-ChildItem -Path $roamingPath -Directory | Select-Object -ExpandProperty FullName  
-              foreach ($f in $allFolders) {  
-                  if ($terminalFolders -notcontains $f) { $terminalFolders += $f }  
-              }  
-          }  
+                  $zipFiles = Get-ChildItem -Path $expertsTarget -Filter "*.zip"
+                  foreach ($zip in $zipFiles) {
+                      Write-Host "Extracting ZIP package: $($zip.Name)"
+                      $extractFolder = Join-Path $expertsTarget $zip.BaseName
+                      New-Item -ItemType Directory -Path $extractFolder -Force | Out-Null
+                      Expand-Archive -Path $zip.FullName -DestinationPath $extractFolder -Force
+                  }
+              }
 
-          foreach ($folder in $terminalFolders) {  
-              $mql5Target = Join-Path $folder "MQL5"  
-              if (-not (Test-Path $mql5Target)) { New-Item -ItemType Directory -Path $mql5Target -Force | Out-Null }  
+              $mq5Files = Get-ChildItem -Path $expertsTarget -Filter "*.mq5" -Recurse
+              foreach ($mq5 in $mq5Files) {
+                  Write-Host "Compiling EA: $($mq5.FullName)"
+                  $proc = Start-Process -FilePath $metaEditorExe -ArgumentList "/compile:`"$($mq5.FullName)`"" -PassThru
+                  $timeoutSec = 25
+                  $sw = [System.Diagnostics.Stopwatch]::StartNew()
+                  while (-not $proc.HasExited -and $sw.Elapsed.TotalSeconds -lt $timeoutSec) {
+                      Start-Sleep -Milliseconds 500
+                  }
+                  if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
+              }
+          }
 
-              $excludeList = @(".git", ".github", ".claude", ".clinerules")  
-              Get-ChildItem -Path $env:GITHUB_WORKSPACE | Where-Object { $excludeList -notcontains $_.Name } | ForEach-Object {  
-                  Copy-Item -Path $_.FullName -Destination $mql5Target -Recurse -Force  
-              }  
+          $batPath = Join-Path $desktopPath "run_all.bat"
+          $batContent = @"
+          @echo off
+          title Exness MT5 + MQL5 Cloud Earning Runner
+          echo ========================================================
+          echo    Starting MT5 Trading & MQL5 Cloud Network Earning
+          echo ========================================================
 
-              $repoExpertsPath = Join-Path $env:GITHUB_WORKSPACE "MQL5\Experts"  
-              $expertsTarget = Join-Path $mql5Target "Experts"  
-              if (-not (Test-Path $expertsTarget)) { New-Item -ItemType Directory -Path $expertsTarget -Force | Out-Null }  
+          set "MT5_PATH=C:\Program Files\MetaTrader 5 - EXNESS"
+          set "TERMINAL=%MT5_PATH%\terminal64.exe"
+          set "TESTER=%MT5_PATH%\metatester64.exe"
+          set "CONFIG_FILE=%~dp0mt5_live_config.ini"
 
-              if (Test-Path $repoExpertsPath) {  
-                  Copy-Item -Path "$repoExpertsPath\*" -Destination $expertsTarget -Recurse -Force  
+          taskkill /F /IM terminal64.exe 2>nul
+          taskkill /F /IM metatester64.exe 2>nul
+          timeout /t 2 /nobreak >nul
 
-                  $zipFiles = Get-ChildItem -Path $expertsTarget -Filter "*.zip"  
-                  foreach ($zip in $zipFiles) {  
-                      Write-Host "Extracting ZIP package: $($zip.Name)"  
-                      $extractFolder = Join-Path $expertsTarget $zip.BaseName  
-                      New-Item -ItemType Directory -Path $extractFolder -Force | Out-Null  
-                      Expand-Archive -Path $zip.FullName -DestinationPath $extractFolder -Force  
-                  }  
-              }  
+          echo [1/4] Initializing MT5 Profile...
+          start "" "%TERMINAL%"
+          timeout /t 5 /nobreak >nul
+          taskkill /F /IM terminal64.exe 2>nul
+          timeout /t 2 /nobreak >nul
 
-              $mq5Files = Get-ChildItem -Path $expertsTarget -Filter "*.mq5" -Recurse  
-              foreach ($mq5 in $mq5Files) {  
-                  Write-Host "Compiling EA: $($mq5.FullName)"  
-                  $proc = Start-Process -FilePath $metaEditorExe -ArgumentList "/compile:`"$($mq5.FullName)`"" -PassThru  
-                  $timeoutSec = 25  
-                  $sw = [System.Diagnostics.Stopwatch]::StartNew()  
-                  while (-not $proc.HasExited -and $sw.Elapsed.TotalSeconds -lt $timeoutSec) {  
-                      Start-Sleep -Milliseconds 500  
-                  }  
-                  if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }  
-              }  
-          }  
+          echo [2/4] Starting Background Wizard Auto-Closer...
+          start /min powershell -Command "`$sig = '[DllImport(\"user32.dll\")] public static extern IntPtr FindWindow(string l, string w); [DllImport(\"user32.dll\")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);'; `$type = Add-Type -MemberDefinition `$sig -Name 'Win32W' -Namespace 'Bot' -PassThru; while(`$true) { `$hwnd = `$type::FindWindow(`$null, 'Open an Account'); if(`$hwnd -ne [IntPtr]::Zero) { `$type::PostMessage(`$hwnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero); }; Start-Sleep -Seconds 1; }"
 
-          $batPath = Join-Path $desktopPath "run_all.bat"  
-          $batContent = @"  
-          @echo off  
-          title Exness MT5 + MQL5 Cloud Earning Runner  
-          echo ========================================================  
-          echo    Starting MT5 Trading & MQL5 Cloud Network Earning  
-          echo ========================================================  
+          echo [3/4] Launching MetaTrader 5 Live Trading...
+          start "" "%TERMINAL%" "/config:%CONFIG_FILE%"
+          timeout /t 5 /nobreak >nul
 
-          set "MT5_PATH=C:\Program Files\MetaTrader 5 - EXNESS"  
-          set "TERMINAL=%MT5_PATH%\terminal64.exe"  
-          set "TESTER=%MT5_PATH%\metatester64.exe"  
-          set "CONFIG_FILE=%~dp0mt5_live_config.ini"  
+          echo [4/4] Launching MQL5 Cloud Network Agents for Earning...
+          if exist "%TESTER%" (
+              start /min "" "%TESTER%" /login:rinkugohil30897 /server:MQL5Cloud /pools:1 /agents:4
+          )
 
-          taskkill /F /IM terminal64.exe 2>nul  
-          taskkill /F /IM metatester64.exe 2>nul  
-          timeout /t 2 /nobreak >nul  
+          echo ========================================================
+          echo    Success! Trading & Cloud Earning are active.
+          echo ========================================================
+          "@
 
-          echo [1/4] Initializing MT5 Profile...  
-          start "" "%TERMINAL%"  
-          timeout /t 5 /nobreak >nul  
-          taskkill /F /IM terminal64.exe 2>nul  
-          timeout /t 2 /nobreak >nul  
+          [System.IO.File]::WriteAllText($batPath, $batContent, [System.Text.Encoding]::ASCII)
+          Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$batPath`""
 
-          echo [2/4] Starting Background Exness Setup Wizard Automator...  
-          start /min powershell -Command "`$sig = '`n[DllImport(\"user32.dll\")] public static extern IntPtr FindWindow(string l, string w);`n[DllImport(\"user32.dll\")] public static extern IntPtr FindWindowEx(IntPtr p, IntPtr c, string cl, string t);`n[DllImport(\"user32.dll\")] public static extern IntPtr SendMessage(IntPtr h, uint m, IntPtr w, IntPtr l);'; `$type = Add-Type -MemberDefinition `$sig -Name 'Win32W' -Namespace 'Bot' -PassThru; while(`$true) { `$hwnd = `$type::FindWindow(`$null, 'Open an Account'); if(`$hwnd -ne [IntPtr]::Zero) { `$btn = `$type::FindWindowEx(`$hwnd, [IntPtr]::Zero, 'Button', 'Next >'); if(`$btn -ne [IntPtr]::Zero) { `$type::SendMessage(`$btn, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero); } }; Start-Sleep -Seconds 1; }"  
+      - name: Maintain Connection & Monitor RDP
+        run: |
+          Write-Host ""
+          Write-Host "====================================="
+          Write-Host "        RDP ACCESS DETAILS           "
+          Write-Host "====================================="
+          Write-Host "IP Address : $env:TAILSCALE_IP"
+          Write-Host "Username   : Admin"
+          Write-Host "Password   : Vishnu"
+          Write-Host "====================================="
+          Write-Host ""
 
-          echo [3/4] Launching MetaTrader 5 Live Trading...  
-          start "" "%TERMINAL%" "/config:%CONFIG_FILE%"  
-          timeout /t 5 /nobreak >nul  
-
-          echo [4/4] Launching MQL5 Cloud Network Agents for Earning...  
-          if exist "%TESTER%" (  
-              start /min "" "%TESTER%" /login:rinkugohil30897 /server:MQL5Cloud /pools:1 /agents:4  
-          )  
-
-          echo ========================================================  
-          echo    Success! Trading & Cloud Earning are active.  
-          echo ========================================================  
-          "@  
-
-          [System.IO.File]::WriteAllText($batPath, $batContent, [System.Text.Encoding]::ASCII)  
-          Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$batPath`""  
-
-      - name: Maintain Connection & Monitor RDP  
-        run: |  
-          Write-Host ""  
-          Write-Host "====================================="  
-          Write-Host "        RDP ACCESS DETAILS           "  
-          Write-Host "====================================="  
-          Write-Host "IP Address : $env:TAILSCALE_IP"  
-          Write-Host "Username   : Admin"  
-          Write-Host "Password   : Vishnu"  
-          Write-Host "====================================="  
-          Write-Host ""  
-
-          while ($true) {  
-              Write-Host "[(Get-Date)] RDP Active - MT5 Trading & Cloud Earning Running..."  
-              Start-Sleep -Seconds 300  
+          while ($true) {
+              Write-Host "[(Get-Date)] RDP Active - MT5 Trading & Cloud Earning Running..."
+              Start-Sleep -Seconds 300
           }
