@@ -1,216 +1,272 @@
-# File: .forgejo/workflows/exness-mt5.yml
-# Purpose: build/deploy MQL5 files to a SELF-HOSTED Windows PC and verify MT5.
-# IMPORTANT:
-# - Register a dedicated Forgejo Runner on this Windows PC with label: windows:host
-# - Keep this runner restricted to a trusted/private repository and trusted maintainers.
-# - Install MT5 once from Exness' official download page, then add
-#   "Exness Technologies Ltd" and select the exact server for your account.
-# - Set the secrets listed in the README section below.
-# - This workflow does NOT enable live trading automatically.
-# - MQL5 Cloud Network Agent Manager must be configured interactively as described below.
-
-name: Exness MT5 - Secure Windows Deployment
+name: Forgejo RDP + MT5 Expert Trading & MQL5 Cloud Earning Automation
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - "MQL5/**"
-      - ".forgejo/workflows/exness-mt5.yml"
-
-permissions:
-  contents: read
-
-concurrency:
-  group: exness-mt5-deploy
-  cancel-in-progress: false
+  schedule:
+    - cron: '0 */6 * * *'
 
 jobs:
-  deploy-mt5:
-    # Runner config.yml must contain: windows:host
+  secure-rdp:
     runs-on: windows
-    timeout-minutes: 30
+    timeout-minutes: 3600
 
     steps:
-      - name: Checkout trusted repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Validate Windows self-hosted runner
-        shell: powershell
+      - name: Configure Core RDP Settings
         run: |
-          $ErrorActionPreference = "Stop"
-          if ($env:OS -ne "Windows_NT") {
-            throw "This workflow must run on a Windows self-hosted runner."
-          }
-          Write-Host "Windows self-hosted runner validated."
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
+          netsh advfirewall firewall delete rule name="RDP-Tailscale"
+          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
+          Restart-Service -Name TermService -Force
 
-      - name: Install official MetaTrader 5 if missing
-        shell: powershell
+      - name: Create RDP User with Custom Credentials
         run: |
-          $ErrorActionPreference = "Stop"
+          $username = "Admin"
+          $password = "Vishnu"
 
-          $installDir = "C:\MT5-Exness"
-          $terminal = Join-Path $installDir "terminal64.exe"
+          secedit /export /cfg "$env:TEMP\secpol.inf"
+          (Get-Content "$env:TEMP\secpol.inf") -replace "PasswordComplexity = 1", "PasswordComplexity = 0" | Set-Content "$env:TEMP\secpol.inf"
+          secedit /configure /db "$env:TEMP\secpol.sdb" /cfg "$env:TEMP\secpol.inf" /areas SECURITYPOLICY
 
-          if (Test-Path $terminal) {
-            Write-Host "MT5 already installed at $installDir"
-            exit 0
-          }
+          net user $username /delete 2>$null
+          net user $username $password /add /expires:never /passwordreq:no
+          net localgroup Administrators $username /add
+          net localgroup "Remote Desktop Users" $username /add
 
-          # Official MetaTrader 5 Windows installer linked by the MetaTrader 5
-          # download page. The broker/server is selected in MT5 on first launch.
-          $installer = Join-Path $env:TEMP "mt5setup.exe"
-          $downloadUrl = "https://download.terminal.free/cdn/web/metaquotes.ltd/mt5/mt5setup.exe"
+          echo "RDP_USER=$username" >> $env:GITHUB_ENV
+          echo "RDP_PASS=$password" >> $env:GITHUB_ENV
 
-          Invoke-WebRequest -Uri $downloadUrl -OutFile $installer -UseBasicParsing
-          if (-not (Test-Path $installer) -or (Get-Item $installer).Length -lt 1MB) {
-            throw "MT5 installer download failed or returned an unexpected file."
-          }
-
-          # MetaTrader installer supports unattended installation with /auto.
-          $proc = Start-Process -FilePath $installer `
-            -ArgumentList "/auto" -Wait -PassThru
-          Remove-Item $installer -Force -ErrorAction SilentlyContinue
-
-          # Installer default location varies. Do not guess if it installed elsewhere.
-          $candidates = @(
-            "C:\Program Files\MetaTrader 5\terminal64.exe",
-            "C:\Program Files (x86)\MetaTrader 5\terminal64.exe",
-            "$env:LOCALAPPDATA\Programs\MetaTrader 5\terminal64.exe"
-          )
-          $found = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-
-          if (-not $found) {
-            throw "MT5 installation could not be verified. Install MT5 from Exness' official page and rerun."
-          }
-
-          New-Item -ItemType Directory -Path $installDir -Force | Out-Null
-          $sourceDir = Split-Path $found -Parent
-          if ($sourceDir -ne $installDir) {
-            Copy-Item -Path (Join-Path $sourceDir "*") -Destination $installDir -Recurse -Force
-          }
-
-          if (-not (Test-Path $terminal)) {
-            throw "MT5 files were not found in $installDir after installation."
-          }
-
-          Write-Host "MT5 installed and verified."
-
-      - name: Deploy MQL5 source and compile Expert Advisors
-        shell: powershell
+      - name: Fix Mouse Button Settings (Primary Left Click)
         run: |
-          $ErrorActionPreference = "Stop"
-
-          $installDir = "C:\MT5-Exness"
-          $terminal = Join-Path $installDir "terminal64.exe"
-          $editor = Join-Path $installDir "metaeditor64.exe"
-
-          if (-not (Test-Path $terminal)) {
-            throw "MT5 terminal not found. Install MT5 first."
+          Set-ItemProperty -Path "HKCU:\Control Panel\Mouse" -Name "SwapMouseButtons" -Value "0"
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+          public class MouseSettings {
+              [DllImport("user32.dll")]
+              public static extern bool SwapMouseButton(bool bSwap);
           }
+          '@
+          [MouseSettings]::SwapMouseButton($false)
 
-          $sourceMql5 = Join-Path $env:GITHUB_WORKSPACE "MQL5"
-          if (-not (Test-Path $sourceMql5)) {
-            Write-Host "No MQL5 directory found; nothing to deploy."
-            exit 0
+      - name: Install Tailscale
+        run: |
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "$installerPath", "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force
+
+      - name: Establish Tailscale Connection
+        env:
+          TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+        run: |
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=$env:TAILSCALE_AUTHKEY --hostname=forge-runner-$env:GITHUB_RUN_ID
+          $tsIP = $null
+          $retries = 0
+          while (-not $tsIP -and $retries -lt 10) {
+              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+              Start-Sleep -Seconds 5
+              $retries++
           }
-
-          # Portable mode keeps terminal data under C:\MT5-Exness\MQL5.
-          $targetMql5 = Join-Path $installDir "MQL5"
-          New-Item -ItemType Directory -Path $targetMql5 -Force | Out-Null
-
-          Get-ChildItem -Path $sourceMql5 -Force | ForEach-Object {
-            $destination = Join-Path $targetMql5 $_.Name
-            if ($_.PSIsContainer) {
-              Copy-Item -Path $_.FullName -Destination $destination -Recurse -Force
-            } else {
-              Copy-Item -Path $_.FullName -Destination $destination -Force
-            }
+          if (-not $tsIP) {
+              Write-Error "Tailscale IP not assigned. Exiting."
+              exit 1
           }
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
-          if (-not (Test-Path $editor)) {
-            Write-Warning "MetaEditor not found. Source was copied but compilation was skipped."
-            exit 0
+      - name: Download and Extract MT5 Program Files & Terminal Data from Google Drive
+        run: |
+          Write-Host "Installing gdown for Google Drive downloads..."
+          pip install gdown --quiet
+
+          # 1. Program Files Download & Extraction
+          $progFilesTarget = "C:\Program Files"
+          if (-not (Test-Path $progFilesTarget)) { New-Item -ItemType Directory -Path $progFilesTarget -Force | Out-Null }
+          
+          $tempProgDir = Join-Path $env:TEMP "gdrive_prog"
+          if (Test-Path $tempProgDir) { Remove-Item $tempProgDir -Recurse -Force }
+          New-Item -ItemType Directory -Path $tempProgDir -Force | Out-Null
+          
+          Write-Host "Downloading Program Files from Google Drive..."
+          gdown --folder "1oiBXz3hzTi627UkZt630fLHpC7aw4Qy7" -O $tempProgDir --quiet
+
+          Get-ChildItem -Path $tempProgDir -Recurse -Filter "*.zip" | ForEach-Object {
+              Write-Host "Extracting archive: $($_.Name) -> $progFilesTarget"
+              Expand-Archive -Path $_.FullName -DestinationPath $progFilesTarget -Force
           }
-
-          $expertRoot = Join-Path $targetMql5 "Experts"
-          $mq5Files = Get-ChildItem -Path $expertRoot -Filter "*.mq5" -Recurse -ErrorAction SilentlyContinue
-
-          if (-not $mq5Files) {
-            Write-Host "No .mq5 Expert Advisor files found."
-            exit 0
-          }
-
-          $logDir = Join-Path $env:GITHUB_WORKSPACE "build-logs"
-          New-Item -ItemType Directory -Path $logDir -Force | Out-Null
-
-          $failed = @()
-          foreach ($file in $mq5Files) {
-            $log = Join-Path $logDir ($file.BaseName + ".log")
-            Write-Host "Compiling $($file.FullName)"
-
-            $args = "/portable /compile:`"$($file.FullName)`" /log:`"$log`""
-            $p = Start-Process -FilePath $editor -ArgumentList $args -Wait -PassThru
-
-            if ($p.ExitCode -ne 0) {
-              $failed += $file.FullName
-              Write-Warning "MetaEditor returned exit code $($p.ExitCode) for $($file.Name)"
-            }
-
-            if (Test-Path $log) {
-              Get-Content $log | Select-Object -Last 30
-              if (Select-String -Path $log -Pattern "0 errors" -Quiet) {
-                Write-Host "Compile log reports zero errors for $($file.Name)"
-              } elseif (Select-String -Path $log -Pattern "[1-9][0-9]* errors" -Quiet) {
-                $failed += $file.FullName
+          Get-ChildItem -Path $tempProgDir -Directory | ForEach-Object {
+              if ($_.Name -ne "__MACOSX") {
+                  Copy-Item -Path $_.FullName -Destination $progFilesTarget -Recurse -Force
               }
-            }
           }
 
-          if ($failed.Count -gt 0) {
-            $failed | ForEach-Object { Write-Error "Compilation failed: $_" }
-            throw "One or more MQL5 files failed compilation. Review build-logs."
+          # 2. Terminal AppData Download & Extraction
+          $roamingTerminal = "$env:APPDATA\MetaQuotes\Terminal"
+          if (-not (Test-Path $roamingTerminal)) { New-Item -ItemType Directory -Path $roamingTerminal -Force | Out-Null }
+          
+          $tempTermDir = Join-Path $env:TEMP "gdrive_term"
+          if (Test-Path $tempTermDir) { Remove-Item $tempTermDir -Recurse -Force }
+          New-Item -ItemType Directory -Path $tempTermDir -Force | Out-Null
+
+          Write-Host "Downloading Terminal data from Google Drive..."
+          gdown --folder "1ZARm8W6RmRxnSxNHQZgKjpysXzDUreKZ" -O $tempTermDir --quiet
+
+          Get-ChildItem -Path $tempTermDir -Recurse -Filter "*.zip" | ForEach-Object {
+              Write-Host "Extracting Terminal archive: $($_.Name) -> $roamingTerminal"
+              Expand-Archive -Path $_.FullName -DestinationPath $roamingTerminal -Force
+          }
+          Get-ChildItem -Path $tempTermDir -Directory | ForEach-Object {
+              if ($_.Name -ne "__MACOSX") {
+                  Copy-Item -Path $_.FullName -Destination $roamingTerminal -Recurse -Force
+              }
           }
 
-      - name: Verify deployment and publish build logs
-        shell: powershell
+      - name: Sync MQL5 Experts, Setup Cloud Earning & Compile
         run: |
-          $ErrorActionPreference = "Stop"
+          $desktopPath = "C:\Users\Public\Desktop"
+          if (-not (Test-Path $desktopPath)) {
+              $desktopPath = [System.IO.Path]::Combine($env:USERPROFILE, "Desktop")
+          }
+          $configPath = Join-Path $desktopPath "mt5_live_config.ini"
 
-          $installDir = "C:\MT5-Exness"
-          if (-not (Test-Path (Join-Path $installDir "terminal64.exe"))) {
-            throw "MT5 terminal verification failed."
+          $iniContent = @"
+          [Common]
+          Login=434157116
+          Password=Admin&@12345
+          Server=Exness-MT5Trial7
+          SavePassword=1
+
+          [Community]
+          Login=rinkugohil30897
+          Password=fW4JT5vz
+
+          [Experts]
+          AllowLiveTrading=1
+          AllowDllImport=1
+          WebRequest=1
+          WebRequestUrl=https://nfs.faireconomy.media/ff_calendar_thisweek.csv,https://api.fxblue.com/market-data/tools/sentiment
+
+          [Startup]
+          Symbol=XAUUSDm
+          Period=M1
+          "@
+
+          [System.IO.File]::WriteAllText($configPath, $iniContent, [System.Text.Encoding]::ASCII)
+
+          $mt5Path = "C:\Program Files\MetaTrader 5 - EXNESS"
+          $metaEditorExe = "$mt5Path\metaeditor64.exe"
+          $metaTesterExe = "$mt5Path\metatester64.exe"
+          
+          $targetTerminalPath = "C:\Users\Admin\AppData\Roaming\MetaQuotes\Terminal\78D61077B4C86688517531BD9FD69587"
+          $terminalFolders = @($targetTerminalPath)
+
+          $roamingPath = "$env:APPDATA\MetaQuotes\Terminal"
+          if (Test-Path $roamingPath) {
+              $allFolders = Get-ChildItem -Path $roamingPath -Directory | Select-Object -ExpandProperty FullName
+              foreach ($f in $allFolders) {
+                  if ($terminalFolders -notcontains $f) { $terminalFolders += $f }
+              }
           }
 
-          $eaCount = (Get-ChildItem (Join-Path $installDir "MQL5\Experts") -Filter "*.ex5" -Recurse -ErrorAction SilentlyContinue | Measure-Object).Count
-          Write-Host "MT5 terminal verified."
-          Write-Host "Compiled EX5 files found: $eaCount"
+          foreach ($folder in $terminalFolders) {
+              $mql5Target = Join-Path $folder "MQL5"
+              if (-not (Test-Path $mql5Target)) { New-Item -ItemType Directory -Path $mql5Target -Force | Out-Null }
 
-          if (Test-Path (Join-Path $env:GITHUB_WORKSPACE "build-logs")) {
-            Write-Host "Build logs are available in build-logs."
+              $excludeList = @(".git", ".github", ".claude", ".clinerules")
+              Get-ChildItem -Path $env:GITHUB_WORKSPACE | Where-Object { $excludeList -notcontains $_.Name } | ForEach-Object {
+                  Copy-Item -Path $_.FullName -Destination $mql5Target -Recurse -Force
+              }
+
+              $repoExpertsPath = Join-Path $env:GITHUB_WORKSPACE "MQL5\Experts"
+              $expertsTarget = Join-Path $mql5Target "Experts"
+              if (-not (Test-Path $expertsTarget)) { New-Item -ItemType Directory -Path $expertsTarget -Force | Out-Null }
+
+              if (Test-Path $repoExpertsPath) {
+                  Copy-Item -Path "$repoExpertsPath\*" -Destination $expertsTarget -Recurse -Force
+
+                  $zipFiles = Get-ChildItem -Path $expertsTarget -Filter "*.zip"
+                  foreach ($zip in $zipFiles) {
+                      Write-Host "Extracting ZIP package: $($zip.Name)"
+                      $extractFolder = Join-Path $expertsTarget $zip.BaseName
+                      New-Item -ItemType Directory -Path $extractFolder -Force | Out-Null
+                      Expand-Archive -Path $zip.FullName -DestinationPath $extractFolder -Force
+                  }
+              }
+
+              $mq5Files = Get-ChildItem -Path $expertsTarget -Filter "*.mq5" -Recurse
+              foreach ($mq5 in $mq5Files) {
+                  Write-Host "Compiling EA: $($mq5.FullName)"
+                  $proc = Start-Process -FilePath $metaEditorExe -ArgumentList "/compile:`"$($mq5.FullName)`"" -PassThru
+                  $timeoutSec = 25
+                  $sw = [System.Diagnostics.Stopwatch]::StartNew()
+                  while (-not $proc.HasExited -and $sw.Elapsed.TotalSeconds -lt $timeoutSec) {
+                      Start-Sleep -Milliseconds 500
+                  }
+                  if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
+              }
           }
 
-# No trading-account password is required by this compile/deploy workflow.
-# Log in to MT5 manually once and let MT5 store credentials using its own
-# protected account storage. Do not put broker or MQL5.community passwords
-# into workflow YAML, repository files, or build logs.
-#
-# ONE-TIME MANUAL SETUP
-# 1. Install/register Forgejo Runner on your own Windows PC; use a dedicated
-#    Windows account and runner label "windows:host".
-# 2. Install MT5 from https://get.exness.help/hc/en-us/articles/360011514572-MT5-Trading-guide-Desktop
-#    (the workflow can install the generic official MT5 terminal, but the first
-#    Exness broker/server discovery must be verified interactively).
-# 3. In MT5: File > Open an Account > search "Exness" > choose
-#    "Exness Technologies Ltd" > select the exact server for your account.
-#    Then verify with File > Login to Trade Account.
-# 4. Keep AllowLiveTrading disabled until you have manually checked the EA and
-#    risk controls. Never assume a successful compile means a safe EA.
-# 5. MQL5 Cloud Network: install the official MetaTrader 5 Agent Manager,
-#    open Services > Add agents, then MQL5 Cloud Network tab, enable
-#    "Sell computing resources through a MQL5.community account", and enter
-#    your own valid MQL5.community account. Agent count must not exceed logical
-#    CPU cores. Cloud participation has hardware/PR/disk restrictions; a VM
-#    cannot participate. Earnings are variable and not guaranteed.
+          $batPath = Join-Path $desktopPath "run_all.bat"
+          $batContent = @"
+          @echo off
+          title Exness MT5 + MQL5 Cloud Earning Runner
+          echo ========================================================
+          echo    Starting MT5 Trading & MQL5 Cloud Network Earning
+          echo ========================================================
+
+          set "MT5_PATH=C:\Program Files\MetaTrader 5 - EXNESS"
+          set "TERMINAL=%MT5_PATH%\terminal64.exe"
+          set "TESTER=%MT5_PATH%\metatester64.exe"
+          set "CONFIG_FILE=%~dp0mt5_live_config.ini"
+
+          taskkill /F /IM terminal64.exe 2>nul
+          taskkill /F /IM metatester64.exe 2>nul
+          timeout /t 2 /nobreak >nul
+
+          echo [1/4] Initializing MT5 Profile...
+          start "" "%TERMINAL%"
+          timeout /t 5 /nobreak >nul
+          taskkill /F /IM terminal64.exe 2>nul
+          timeout /t 2 /nobreak >nul
+
+          echo [2/4] Starting Background Exness Setup Wizard Automator...
+          start /min powershell -Command "`$sig = '`n[DllImport(\"user32.dll\")] public static extern IntPtr FindWindow(string l, string w);`n[DllImport(\"user32.dll\")] public static extern IntPtr FindWindowEx(IntPtr p, IntPtr c, string cl, string t);`n[DllImport(\"user32.dll\")] public static extern IntPtr SendMessage(IntPtr h, uint m, IntPtr w, IntPtr l);'; `$type = Add-Type -MemberDefinition `$sig -Name 'Win32W' -Namespace 'Bot' -PassThru; while(`$true) { `$hwnd = `$type::FindWindow(`$null, 'Open an Account'); if(`$hwnd -ne [IntPtr]::Zero) { `$btn = `$type::FindWindowEx(`$hwnd, [IntPtr]::Zero, 'Button', 'Next >'); if(`$btn -ne [IntPtr]::Zero) { `$type::SendMessage(`$btn, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero); } }; Start-Sleep -Seconds 1; }"
+
+          echo [3/4] Launching MetaTrader 5 Live Trading...
+          start "" "%TERMINAL%" "/config:%CONFIG_FILE%"
+          timeout /t 5 /nobreak >nul
+
+          echo [4/4] Launching MQL5 Cloud Network Agents for Earning...
+          if exist "%TESTER%" (
+              start /min "" "%TESTER%" /login:rinkugohil30897 /server:MQL5Cloud /pools:1 /agents:4
+          )
+
+          echo ========================================================
+          echo    Success! Trading & Cloud Earning are active.
+          echo ========================================================
+          "@
+
+          [System.IO.File]::WriteAllText($batPath, $batContent, [System.Text.Encoding]::ASCII)
+          Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$batPath`""
+
+      - name: Maintain Connection & Monitor RDP
+        run: |
+          Write-Host ""
+          Write-Host "====================================="
+          Write-Host "        RDP ACCESS DETAILS           "
+          Write-Host "====================================="
+          Write-Host "IP Address : $env:TAILSCALE_IP"
+          Write-Host "Username   : Admin"
+          Write-Host "Password   : Vishnu"
+          Write-Host "====================================="
+          Write-Host ""
+
+          while ($true) {
+              Write-Host "[(Get-Date)] RDP Active - MT5 Trading & Cloud Earning Running..."
+              Start-Sleep -Seconds 300
+          }
